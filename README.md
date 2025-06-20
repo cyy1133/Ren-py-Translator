@@ -5,6 +5,12 @@ Renpy Translator for Script.
 
 API key를 얻는 법은 다음 링크를 참조하세요.
 
+https://aistudio.google.com/app/apikey?hl=ko
+구글에 회원가입 및 로그인을 진행해주세요.
+화면 중앙에 있는 Google AI Sudio에 로그인 을 클릭해주세요.
+좌측 메뉴에서 Get API Key 메뉴를 클릭해주세요.
+API Key 생성하기 버튼을 클릭해주세요.
+
 사용법 : 
 
 1. Start.bat 파일을 실행합니다 (Python3.9 (3.12 권장) 설치가 되어있어야 합니다.)
