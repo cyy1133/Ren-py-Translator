@@ -16,7 +16,6 @@ API key를 얻는 법은 다음 링크를 참조하세요.
 7. ** 참고 귀찮지 않도록 화자 정보를 Json으로 저장해서 다시 사용할 수 있습니다. **
 8. ![image](https://github.com/user-attachments/assets/c4e2117f-7452-42a6-9894-fec1a2ed471c)
 9. ![image](https://github.com/user-attachments/assets/bc9df750-6826-4d9b-8deb-794cae5617db)
-10.   크게 문제 없다면 API 호출 시간은 0.1 로 설정을 권장합니다 ( 느리게 테스트 하는 것을 기본값으로 하여 2.0초로 설정되어 있지만, 실제로는 2초를 쓰면 매우 느림 )
 
 
 
