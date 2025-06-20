@@ -26,7 +26,5 @@ API Key 생성하기 버튼을 클릭해주세요.
 7. ** 참고 귀찮지 않도록 화자 정보를 Json으로 저장해서 다시 사용할 수 있습니다. **
 8. ![image](https://github.com/user-attachments/assets/c4e2117f-7452-42a6-9894-fec1a2ed471c)
 9. ![image](https://github.com/user-attachments/assets/bc9df750-6826-4d9b-8deb-794cae5617db)
-==============================================================
-
 
 ![Sample](https://github.com/user-attachments/assets/9c6e70b1-523d-434e-92e6-32587d5a11df)
