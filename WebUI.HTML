@@ -1,0 +1,971 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ren'Py 스크립트 번역 도우미</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Noto Sans KR', 'Inter', sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            background-color: #111827; /* bg-gray-900 */
+        }
+        .tooltip {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            cursor: help;
+        }
+        .tooltip .tooltiptext {
+            visibility: hidden;
+            width: 280px;
+            background-color: #374151; /* bg-gray-700 */
+            color: #e5e7eb; /* text-gray-200 */
+            text-align: left;
+            border-radius: 8px; /* rounded-lg */
+            padding: 12px; /* p-3 */
+            position: absolute;
+            z-index: 20;
+            bottom: 135%;
+            left: 50%;
+            margin-left: -140px;
+            opacity: 0;
+            transition: opacity 0.25s ease-out, transform 0.25s ease-out;
+            font-size: 0.8rem;
+            line-height: 1.5;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+            transform: translateY(8px) scale(0.95);
+            pointer-events: none;
+        }
+        .tooltip .tooltiptext::after {
+            content: "";
+            position: absolute;
+            top: 100%;
+            left: 50%;
+            margin-left: -6px;
+            border-width: 6px;
+            border-style: solid;
+            border-color: #374151 transparent transparent transparent; /* border-gray-700 */
+        }
+        .tooltip:hover .tooltiptext {
+            visibility: visible;
+            opacity: 1;
+            transform: translateY(0) scale(1);
+        }
+        
+        .scrollable-content { 
+            max-height: 280px; 
+            overflow-y: auto;
+            padding-right: 10px; 
+            scrollbar-width: thin;
+            scrollbar-color: #4b5563 #374151; /* scrollbar-thumb-gray-600 scrollbar-track-gray-700 */
+        }
+        .scrollable-content::-webkit-scrollbar { width: 8px; }
+        .scrollable-content::-webkit-scrollbar-track { background: #374151; border-radius: 10px; } /* bg-gray-700 */
+        .scrollable-content::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 10px; border: 2px solid #374151; } /* bg-gray-600 border-gray-700 */
+        .scrollable-content::-webkit-scrollbar-thumb:hover { background: #6b7280; } /* hover:bg-gray-500 */
+
+        .modal { display: none; position: fixed; z-index: 100; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(17, 24, 39, 0.85); backdrop-filter: blur(6px); } 
+        .modal-content {
+            background-color: #1e293b; /* bg-slate-800 */
+            color: #d1d5db; /* text-gray-300 */
+            margin: 10vh auto; 
+            padding: 30px 35px; 
+            border: 1px solid #374151; /* border-gray-700 */
+            width: 90%;
+            max-width: 600px; 
+            border-radius: 16px; /* rounded-2xl */
+            text-align: center;
+            box-shadow: 0 20px 45px rgba(0,0,0,0.7); 
+            transform: translateY(-20px) scale(0.95); 
+            opacity: 0;
+            animation: modalEnter 0.35s cubic-bezier(0.25, 0.8, 0.25, 1) forwards;
+        }
+        @keyframes modalEnter { 
+            to { transform: translateY(0) scale(1); opacity: 1; } 
+        }
+        .close-button { color: #9ca3af; /* text-gray-400 */ float: right; font-size: 28px; font-weight: bold; line-height: 0.8; transition: color 0.2s, transform 0.2s; cursor: pointer; }
+        .close-button:hover, .close-button:focus { color: #e5e7eb; /* text-gray-200 */ transform: rotate(90deg) scale(1.1); } 
+        
+        .loader { border: 5px solid #374151; /* border-gray-700 */ border-top: 5px solid #2563eb; /* border-t-blue-600 */ border-radius: 50%; width: 40px; height: 40px; animation: spin 0.8s linear infinite; margin: 20px auto; } 
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        .form-input, .form-select, .form-textarea { 
+            background-color: #374151; /* bg-gray-700 */
+            border-color: #4b5563; /* border-gray-600 */
+            color: #e5e7eb; /* text-gray-200 */
+            border-radius: 0.5rem; /* rounded-lg */
+            padding: 0.8rem 1rem; 
+            transition: border-color 0.2s, box-shadow 0.2s, background-color 0.2s;
+            width: 100%;
+            border-width: 1px;
+            box-shadow: inset 0 1px 2px rgba(0,0,0,0.25); 
+        }
+        .form-input:focus, .form-select:focus, .form-textarea:focus {
+            outline: none;
+            border-color: #3b82f6; /* focus:border-blue-500 */
+            background-color: #4b5563; /* focus:bg-gray-600 */
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.3), inset 0 1px 2px rgba(0,0,0,0.25); /* focus:ring-blue-500/30 */
+        }
+        .form-input::placeholder, .form-textarea::placeholder {
+            color: #9ca3af; /* placeholder-gray-400 */
+        }
+        
+        input[type="file"].form-input { padding: 0.5rem 0.75rem; } 
+        input[type="file"]::file-selector-button {
+            margin-right: 1rem; margin-left: -0.75rem; margin-top: -0.5rem; margin-bottom: -0.5rem; 
+            padding: 0.75rem 1rem; 
+            border-radius: 0.5rem 0 0 0.5rem; /* rounded-l-lg */
+            border-width: 0px; font-size: 0.875rem; font-weight: 600;
+            background-color: #2563eb; /* bg-blue-600 */ color: #eff6ff; /* text-blue-50 */
+            transition: background-color 0.2s; cursor: pointer;
+        }
+        input[type="file"]::file-selector-button:hover { background-color: #1d4ed8; } /* hover:bg-blue-700 */
+        
+        label > .tooltip { margin-left: 6px; }
+
+        #fileList {
+            list-style: none; padding: 0; margin-top: 0.75rem; 
+            max-height: 150px; 
+            background-color: #374151; /* bg-gray-700 */ border-radius: 0.5rem; /* rounded-lg */
+            padding: 0.75rem; font-size: 0.875rem; border: 1px solid #4b5563; /* border-gray-600 */
+        }
+         #fileList li { padding: 0.4rem 0.6rem; border-bottom: 1px solid #4b5563; /* border-b-gray-600 */ color: #d1d5db; /* text-gray-300 */ }
+         #fileList li:last-child { border-bottom: none; }
+         .file-item-generated { background-color: #2d3748; /* bg-slate-700 slightly darker */ }
+         .file-item-original-path { font-size: 0.75rem; color: #a0aec0; /* text-slate-400 */ margin-left: 8px; }
+
+
+         .action-button { 
+             padding: 0.6rem 1.2rem; border-radius: 0.5rem; /* rounded-lg */
+             font-size: 0.875rem; font-weight: 500;
+             transition: background-color 0.2s, box-shadow 0.2s, transform 0.1s;
+             border: 1px solid transparent; 
+             box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+         }
+         .action-button:hover { transform: translateY(-1px); box-shadow: 0 3px 6px rgba(0,0,0,0.25); }
+         .action-button:active { transform: translateY(0px); box-shadow: 0 1px 2px rgba(0,0,0,0.2); }
+
+         .persona-button { background-color: #4b5563; /* bg-gray-600 */ color: #e5e7eb; /* text-gray-200 */ border-color: #6b7280; /* border-gray-500 */ }
+         .persona-button:hover { background-color: #6b7280; /* hover:bg-gray-500 */ color: #f3f4f6; /* hover:text-gray-100 */ }
+         
+         .utility-button { background-color: #0d9488; /* bg-teal-600 */ color: #ccfbf1; /* text-teal-100 */ border-color: #0f766e; /* border-teal-700 */ } 
+         .utility-button:hover { background-color: #0f766e; /* hover:bg-teal-700 */ color: #ffffff; }
+
+
+         #translateButton {
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+            font-weight: 600; 
+         }
+         #translateButton:hover {
+             box-shadow: 0 6px 15px rgba(56, 189, 248, 0.5); /* shadow-sky-400/50 */
+         }
+         #translateButton:disabled {
+             box-shadow: none; transform: none; 
+             background-image: none; 
+             background-color: #4b5563; /* bg-gray-600 */
+         }
+         #statusArea {
+             box-shadow: inset 0 2px 6px rgba(0,0,0,0.4);
+             background-color: #1f2937; /* bg-slate-800 */
+         }
+         #logOutput p { line-height: 1.6; }
+         #fixedContentTextArea {
+            width: 100%; min-height: 200px; 
+            background-color: #1f2937; /* bg-slate-800 */
+            color: #e2e8f0; /* text-slate-200 */ border: 1px solid #475569; /* border-slate-600 */
+            border-radius: 0.5rem; /* rounded-lg */ padding: 0.75rem;
+            font-family: 'Consolas', 'Monaco', monospace; 
+            font-size: 0.875rem; line-height: 1.6;
+         }
+         .section-divider {
+            border-color: #374151; /* border-gray-700 */
+         }
+         .label-text {
+             color: #9ca3af; /* text-gray-400 */
+             font-weight: 500;
+         }
+         .main-container {
+            background-color: #1f2937; /* bg-slate-800 */
+            border: 1px solid #374151; /* border-gray-700 */
+         }
+         .header-title {
+            background-image: linear-gradient(to right, #38bdf8, #34d399); /* from-sky-400 to-green-400 */
+         }
+         .header-subtitle {
+             color: #9ca3af; /* text-gray-400 */
+         }
+         .section-card {
+             background-color: #374151; /* bg-gray-700 */
+             padding: 1.5rem; 
+             border-radius: 0.75rem; /* rounded-xl */
+             border: 1px solid #4b5563; /* border-gray-600 */
+             box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+         }
+         .section-title {
+             color: #60a5fa; /* text-sky-400 */
+             font-weight: 600;
+         }
+
+    </style>
+</head>
+<body class="bg-gray-900 text-slate-200 min-h-screen flex flex-col items-center justify-center p-4 sm:p-6 selection:bg-sky-500 selection:text-white">
+
+    <div class="main-container shadow-2xl rounded-2xl p-6 md:p-10 w-full max-w-3xl"> 
+        <header class="mb-10 text-center">
+            <h1 class="header-title text-4xl md:text-5xl font-bold text-transparent bg-clip-text pb-2">Ren'Py 스크립트 번역기</h1>
+            <p class="header-subtitle mt-3 text-lg">Gemini API로 여러 Ren'Py 스크립트를 손쉽게 번역하고, 게임 경로에서 직접 번역 파일을 생성하세요.</p>
+        </header>
+
+        <form id="translationForm" class="space-y-8" onsubmit="return false;"> 
+            <section class="section-card">
+                <h2 class="section-title text-xl mb-6">1. API 및 모델 설정</h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-6"> 
+                    <div>
+                        <label for="apiKey" class="block text-sm font-medium label-text mb-1">Gemini API 키 <span class="text-red-400">*</span>
+                            <span class="tooltip text-slate-400">(?)<span class="tooltiptext">API 키는 실제 앱에서는 백엔드에서 안전하게 처리해야 합니다. Google AI Studio 등에서 발급받으세요.</span></span>
+                        </label>
+                        <input type="password" id="apiKey" name="apiKey" class="form-input" placeholder="API 키를 입력하세요" required>
+                    </div>
+                    <div>
+                        <label for="modelSelect" class="block text-sm font-medium label-text mb-1">Gemini 모델 선택 <span class="text-red-400">*</span>
+                            <span class="tooltip text-slate-400">(?)
+                                <span id="modelTooltipText" class="tooltiptext">모델을 선택하세요.</span>
+                            </span>
+                        </label>
+                        <select id="modelSelect" name="modelSelect" class="form-select form-input"> 
+                            <option value="gemini-1.5-flash-latest" data-description="Gemini 1.5 Flash (최신): 빠르고 비용 효율적인 최신 Flash 모델입니다. 대부분의 작업에 권장됩니다.">Gemini 1.5 Flash (Latest)</option>
+                            <option value="gemini-1.5-pro-latest" data-description="Gemini 1.5 Pro (최신): 최고 성능과 가장 큰 컨텍스트 창을 제공하는 최신 Pro 모델입니다. 복잡한 작업에 적합합니다.">Gemini 1.5 Pro (Latest)</option>
+                            <option value="gemini-1.0-pro" data-description="Gemini 1.0 Pro: 이전 세대 Pro 모델입니다. 특정 레거시 상황에서 필요할 수 있습니다.">Gemini 1.0 Pro</option>
+                        </select>
+                    </div>
+                </div>
+            </section>
+
+            <section class="section-card">
+                <h2 class="section-title text-xl mb-6">2. 번역 파일 준비</h2>
+                <div class="mb-6">
+                    <label for="gameExePath" class="block text-sm font-medium label-text mb-1">Ren'Py 게임 실행 파일 (.exe) 경로 (선택 사항)
+                        <span class="tooltip text-slate-400">(?)<span class="tooltiptext">게임의 .exe 파일 경로를 지정하면, 해당 게임 폴더 내 .rpy 스크립트에서 번역 대상 파일을 자동으로 생성합니다.</span></span>
+                    </label>
+                    <div class="flex gap-x-3">
+                        <input type="text" id="gameExePath" name="gameExePath" class="form-input flex-grow" placeholder="예: C:/Games/MyRenpyGame/MyRenpyGame.exe">
+                        <button type="button" id="generateFilesButton" class="action-button persona-button whitespace-nowrap">경로에서 파일 생성</button>
+                    </div>
+                </div>
+                <div>
+                    <label for="fileInput" class="block text-sm font-medium label-text mb-1">또는, 직접 Ren'Py 스크립트 파일 (.rpy, .txt) 업로드</label>
+                    <input type="file" id="fileInput" name="fileInput" accept=".rpy,.txt" class="form-input" multiple> 
+                    <ul id="fileList" class="scrollable-content mt-3"></ul> 
+                </div>
+            </section>
+
+            <section class="section-card">
+                <h2 class="section-title text-xl mb-6">3. 페르소나 및 번역 설정</h2>
+                <div id="personaSection" class="hidden mt-6 bg-slate-800/50 p-5 rounded-lg border border-slate-600"> 
+                    <div class="flex justify-between items-center mb-4 flex-wrap gap-3"> 
+                        <h3 class="text-lg font-semibold text-sky-400">캐릭터별 어투 가이드</h3>
+                        <div class="space-x-3 flex-shrink-0">
+                             <button type="button" id="loadPersonaButton" class="action-button persona-button">JSON 불러오기</button>
+                             <button type="button" id="savePersonaButton" class="action-button persona-button">JSON 저장하기</button>
+                        </div>
+                    </div>
+                    <input type="file" id="personaFileInput" accept=".json" class="hidden"> 
+                    <div id="personaInputsContainer" class="space-y-4 dynamic-input-container scrollable-content">
+                        {/* 나레이션 및 기본 페르소나 입력칸이 여기에 동적으로 추가될 수 있음 */}
+                    </div>
+                    <p class="mt-4 text-xs text-slate-400">
+                        선택된 파일에서 식별된 캐릭터 및 "나레이션"(_narration_), "기본"(_default_)에 대한 설명을 입력하세요.
+                        <br>JSON 파일로 저장/불러오기 시 `_narration_` 또는 `_default_` 키를 사용합니다.
+                    </p>
+                </div>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-6 mt-6">
+                    <div>
+                        <label for="batchSize" class="block text-sm font-medium label-text mb-1">배치 크기
+                             <span class="tooltip text-slate-400">(?)<span class="tooltiptext">한 번의 API 호출에 포함할 번역 아이템 수입니다. (기본값: 5, API 오류 시 줄여보세요)</span></span>
+                        </label>
+                        <input type="number" id="batchSize" name="batchSize" value="5" min="1" class="form-input" required>
+                    </div>
+                    <div>
+                        <label for="apiDelay" class="block text-sm font-medium label-text mb-1">API 호출 지연 (초)
+                            <span class="tooltip text-slate-400">(?)<span class="tooltiptext">각 API 배치 호출 사이의 대기 시간입니다. (기본값: 2.0, Rate Limit 오류 시 늘려보세요)</span></span>
+                        </label>
+                        <input type="number" id="apiDelay" name="apiDelay" value="2.0" step="0.1" min="0" class="form-input" required>
+                    </div>
+                </div>
+            </section>
+            
+            <div class="pt-4"> 
+                <button id="translateButton" type="submit" class="w-full bg-gradient-to-r from-sky-500 to-cyan-500 hover:from-sky-600 hover:to-cyan-600 text-white font-bold py-3.5 px-6 rounded-lg shadow-lg hover:shadow-xl transition-all duration-300 ease-in-out disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center text-lg transform hover:scale-105 focus:outline-none focus:ring-4 focus:ring-sky-400/50">
+                    <span id="buttonText">번역 시작</span>
+                    <svg id="buttonSpinner" class="animate-spin ml-3 h-5 w-5 text-white hidden" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                </button>
+            </div>
+        </form> 
+
+        <div class="mt-12 pt-10 border-t section-divider">
+            <h2 class="text-2xl font-semibold text-sky-300 mb-5 text-center">번역된 RPY 오류 수정 도구</h2>
+            <p class="text-slate-400 text-sm text-center mb-8">이미 번역된 파일의 문자열 내 실제 개행, 잘못된 따옴표, 탭 문자를 수정합니다.</p>
+            <div class="section-card space-y-6">
+                <div>
+                    <label for="fixUtilityFileInput" class="block text-sm font-medium label-text mb-1">수정할 RPY 파일 선택 (.rpy, .txt)</label>
+                    <input type="file" id="fixUtilityFileInput" accept=".rpy,.txt" class="form-input">
+                </div>
+                <div id="fixUtilityResultSection" class="hidden mt-4 space-y-4">
+                    <div>
+                        <label for="fixedContentTextArea" class="block text-sm font-medium label-text mb-1">수정된 내용 (필요시 직접 복사 또는 아래 버튼으로 다운로드):</label>
+                        <textarea id="fixedContentTextArea" readonly class="form-textarea scrollable-content"></textarea> 
+                    </div>
+                    <button id="downloadFixedButton" class="action-button utility-button w-full md:w-auto">수정된 파일 다운로드</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="statusArea" class="mt-12 p-6 bg-slate-900/80 rounded-xl border border-slate-700 min-h-[150px] max-h-[350px] overflow-y-auto text-sm hidden shadow-inner"> 
+            <p class="font-semibold text-sky-300 mb-4 text-base border-b border-slate-700 pb-2">처리 로그:</p>
+            <div id="logOutput" class="space-y-1.5 scrollable-content"></div> 
+        </div>
+    </div>
+
+    <div id="completionModal" class="modal">
+        <div class="modal-content">
+            <span class="close-button" id="closeModalButton">&times;</span>
+            <div id="modalSpinner" class="loader hidden"></div>
+            <h2 id="modalTitle" class="text-2xl font-bold text-sky-400 mb-5">알림</h2>
+            <p id="modalMessage" class="text-slate-300 text-base leading-relaxed"></p>
+            <button id="modalOkButton" class="mt-8 bg-sky-600 hover:bg-sky-700 text-white font-semibold py-2.5 px-8 rounded-lg transition duration-150 ease-in-out text-base">확인</button>
+        </div>
+    </div>
+
+    <footer class="text-center text-slate-500 mt-12 pb-8">
+        <p>&copy; <span id="currentYear"></span> Ren'Py Translator UI. Gemini API 활용.</p>
+    </footer>
+
+    <script>
+        document.getElementById('currentYear').textContent = new Date().getFullYear();
+        const translationForm = document.getElementById('translationForm'); 
+        const fileInput = document.getElementById('fileInput');
+        const fileListDisplay = document.getElementById('fileList'); 
+        const personaSection = document.getElementById('personaSection');
+        const personaInputsContainer = document.getElementById('personaInputsContainer');
+        const savePersonaButton = document.getElementById('savePersonaButton'); 
+        const loadPersonaButton = document.getElementById('loadPersonaButton'); 
+        const personaFileInput = document.getElementById('personaFileInput'); 
+        const translateButton = document.getElementById('translateButton');
+        const buttonText = document.getElementById('buttonText');
+        const buttonSpinner = document.getElementById('buttonSpinner');
+        const statusArea = document.getElementById('statusArea');
+        const logOutput = document.getElementById('logOutput');
+        const apiKeyInput = document.getElementById('apiKey');
+        const modelSelect = document.getElementById('modelSelect'); 
+        const modelTooltipText = document.getElementById('modelTooltipText'); 
+        const batchSizeInput = document.getElementById('batchSize');
+        const apiDelayInput = document.getElementById('apiDelay');
+
+        const completionModal = document.getElementById('completionModal');
+        const closeModalButton = document.getElementById('closeModalButton');
+        const modalOkButton = document.getElementById('modalOkButton');
+        const modalTitle = document.getElementById('modalTitle');
+        const modalMessage = document.getElementById('modalMessage');
+        const modalSpinner = document.getElementById('modalSpinner');
+
+        const fixUtilityFileInput = document.getElementById('fixUtilityFileInput');
+        const fixUtilityResultSection = document.getElementById('fixUtilityResultSection');
+        const fixedContentTextArea = document.getElementById('fixedContentTextArea');
+        const downloadFixedButton = document.getElementById('downloadFixedButton');
+        let utilityFixedFileContent = ""; 
+        let utilityFixedFileName = "";   
+
+        const gameExePathInput = document.getElementById('gameExePath');
+        const generateFilesButton = document.getElementById('generateFilesButton');
+
+        const BACKEND_URL = 'http://127.0.0.1:5000'; // Base URL
+        let filesData = []; // { file: {name: string, isGenerated?: boolean, original_rpy_path?: string}, content: string }
+        const NARRATION_PERSONA_KEY_UI = "_narration_";
+        const DEFAULT_FALLBACK_PERSONA_KEY_UI = "_default_";
+
+
+        function updateModelTooltip() {
+            const selectedOption = modelSelect.options[modelSelect.selectedIndex];
+            modelTooltipText.textContent = selectedOption.dataset.description || "모델을 선택하세요.";
+        }
+        modelSelect.addEventListener('change', updateModelTooltip);
+        updateModelTooltip(); 
+
+        function showModal(title, message, isLoading = false) {
+            modalTitle.textContent = title;
+            modalMessage.innerHTML = message; 
+            modalSpinner.classList.toggle('hidden', !isLoading);
+            modalOkButton.classList.toggle('hidden', isLoading);
+            completionModal.style.display = "block";
+        }
+
+        closeModalButton.onclick = function() { completionModal.style.display = "none"; }
+        modalOkButton.onclick = function() { completionModal.style.display = "none"; }
+        window.onclick = function(event) {
+            if (event.target == completionModal) { completionModal.style.display = "none"; }
+        }
+
+        function addLog(message, type = 'info') {
+            statusArea.classList.remove('hidden');
+            const logEntry = document.createElement('p');
+            const timestamp = new Date().toLocaleTimeString('ko-KR', { hour12: false });
+            logEntry.innerHTML = `<span class="text-slate-500 mr-2">[${timestamp}]</span> ${message}`; 
+            
+            if (type === 'error') logEntry.classList.add('text-red-400', 'font-medium');
+            else if (type === 'success') logEntry.classList.add('text-green-400', 'font-medium');
+            else if (type === 'warning') logEntry.classList.add('text-yellow-400');
+            else logEntry.classList.add('text-slate-300');
+            
+            logOutput.appendChild(logEntry);
+            statusArea.scrollTo({ top: statusArea.scrollHeight, behavior: 'smooth' });
+        }
+        
+        async function processAndDisplayFiles() {
+            fileListDisplay.innerHTML = '';
+            personaInputsContainer.innerHTML = '';
+            personaSection.classList.add('hidden');
+        
+            if (filesData.length === 0) {
+                addLog('처리할 파일이 없습니다. 파일을 업로드하거나 경로에서 생성해주세요.');
+                return;
+            }
+        
+            addLog(`${filesData.length}개의 파일 처리 준비됨:`);
+            filesData.forEach(fd => {
+                const listItem = document.createElement('li');
+                listItem.textContent = fd.file.name;
+                if (fd.file.isGenerated && fd.file.original_rpy_path) {
+                    listItem.classList.add('file-item-generated');
+                    const originalPathSpan = document.createElement('span');
+                    originalPathSpan.classList.add('file-item-original-path');
+                    originalPathSpan.textContent = `(원본: ${fd.file.original_rpy_path})`;
+                    listItem.appendChild(originalPathSpan);
+                }
+                fileListDisplay.appendChild(listItem);
+            });
+        
+            addLog('모든 파일 내용 기반으로 캐릭터 및 나레이션 분석 시작...');
+            const allCharacters = new Set();
+            let narrationDetectedInAnyFile = false;
+        
+            filesData.forEach(fd => {
+                if (fd.content) { // content가 있는지 확인
+                    const characters = parseCharactersFromFile(fd.content);
+                    characters.forEach(char => allCharacters.add(char));
+                    if (detectNarrationInContent(fd.content)) {
+                        narrationDetectedInAnyFile = true;
+                    }
+                } else {
+                    addLog(`경고: ${fd.file.name} 파일의 내용이 없습니다. 페르소나 분석에서 제외됩니다.`, 'warning');
+                }
+            });
+        
+            addLog('모든 파일 분석 완료.');
+        
+            if (narrationDetectedInAnyFile) allCharacters.add(NARRATION_PERSONA_KEY_UI);
+            allCharacters.add(DEFAULT_FALLBACK_PERSONA_KEY_UI);
+        
+            if (allCharacters.size > 0) {
+                personaSection.classList.remove('hidden');
+                addLog(`전체 고유 캐릭터 ID 및 특수 키 식별 완료: <span class="font-medium text-sky-400">${Array.from(allCharacters).join(', ')}</span>. 페르소나 입력창 생성 중...`);
+                personaInputsContainer.innerHTML = '';
+                if (allCharacters.has(NARRATION_PERSONA_KEY_UI)) createPersonaInput(NARRATION_PERSONA_KEY_UI, "나레이션 (Narration)");
+                if (allCharacters.has(DEFAULT_FALLBACK_PERSONA_KEY_UI)) createPersonaInput(DEFAULT_FALLBACK_PERSONA_KEY_UI, "기본 페르소나 (Default)");
+                allCharacters.forEach(charId => {
+                    if (charId !== NARRATION_PERSONA_KEY_UI && charId !== DEFAULT_FALLBACK_PERSONA_KEY_UI) createPersonaInput(charId);
+                });
+                addLog('페르소나 입력창 생성 완료.');
+            } else {
+                addLog('선택된 파일들에서 Ren\'Py 형식의 캐릭터 ID 또는 나레이션을 찾지 못했습니다.', 'warning');
+            }
+        }
+
+
+        fileInput.addEventListener('change', async (event) => {
+            const selectedFiles = Array.from(event.target.files);
+            
+            if (selectedFiles.length > 0) {
+                const newFilesDataPromises = selectedFiles.map(file => {
+                    return file.text().then(content => ({
+                        file: file, // 실제 File 객체
+                        content: content
+                    })).catch(error => {
+                        addLog(`[${file.name}] 파일 읽기 중 오류: ${error.message}`, 'error');
+                        return null; // 오류 발생 시 null 반환
+                    });
+                });
+                
+                const results = await Promise.all(newFilesDataPromises);
+                // filesData를 새로 업로드된 파일로 교체 (기존 생성된 파일은 유지하지 않음)
+                filesData = results.filter(r => r !== null); // null이 아닌 결과만 필터링
+                await processAndDisplayFiles();
+            } else if (filesData.length === 0) { 
+                addLog('선택된 업로드 파일이 없습니다.');
+            }
+            // 파일 입력 초기화 (동일 파일 재선택 가능하도록)
+            event.target.value = null;
+        });
+
+        generateFilesButton.addEventListener('click', async () => {
+            const gameExePath = gameExePathInput.value.trim();
+            if (!gameExePath) {
+                showModal("오류", "Ren'Py 게임 실행 파일(.exe) 경로를 입력해주세요.");
+                addLog("게임 .exe 경로가 입력되지 않았습니다.", "error");
+                return;
+            }
+
+            addLog(`선택된 게임 경로: ${gameExePath}`);
+            addLog("백엔드에 번역 대상 파일 생성 요청 중...", "info");
+            translateButton.disabled = true; 
+            generateFilesButton.disabled = true; 
+            const originalButtonText = buttonText.textContent;
+            buttonText.textContent = '파일 생성 중...';
+            buttonSpinner.classList.remove('hidden');
+            showModal("파일 생성 중", "지정된 경로에서 번역 대상 파일을 생성하고 있습니다...<br>이 작업은 시간이 다소 걸릴 수 있습니다.", true);
+
+            try {
+                const response = await fetch(`${BACKEND_URL}/generate_files_for_translation`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ game_exe_path: gameExePath })
+                });
+
+                if (!response.ok) {
+                    let errorDetail = '파일 생성 중 서버 오류 발생';
+                    try { const errorData = await response.json(); errorDetail = errorData.error || JSON.stringify(errorData); }
+                    catch (e) { errorDetail = await response.text() || errorDetail; }
+                    throw new Error(`서버 오류 (${response.status}): ${errorDetail}`);
+                }
+
+                const generatedFilesResults = await response.json();
+                
+                if (generatedFilesResults.error) { 
+                    throw new Error(generatedFilesResults.error);
+                }
+
+                addLog(`백엔드로부터 ${generatedFilesResults.length}개의 생성된 파일 정보 수신 완료.`);
+
+                if (generatedFilesResults.length === 0) {
+                    showModal("알림", "지정된 경로에서 번역할 수 있는 스크립트 파일을 찾지 못했거나, 파일 내에 번역 대상이 없습니다.");
+                    addLog("생성된 번역 대상 파일이 없습니다.", "warning");
+                    // 모달의 OK 버튼을 보이게 하고 스피너는 숨김
+                    modalSpinner.classList.add('hidden');
+                    modalOkButton.classList.remove('hidden');
+                    return; // 여기서 함수 종료
+                }
+                
+                // 기존 filesData에 추가하거나, 대체할 수 있음. 여기서는 대체.
+                filesData = generatedFilesResults.map(gf => ({ 
+                    file: { 
+                        name: gf.file_name, 
+                        isGenerated: true, 
+                        original_rpy_path: gf.original_rpy_path 
+                    },
+                    content: gf.file_content
+                }));
+
+                await processAndDisplayFiles(); 
+
+                showModal("파일 생성 완료", `${generatedFilesResults.length}개의 번역 대상 파일이 준비되었습니다. 페르소나 설정을 확인하고 '번역 시작' 버튼을 눌러주세요.`);
+                addLog("번역 대상 파일 생성이 완료되었습니다. 화면에서 파일 목록을 확인하고 페르소나 설정을 진행한 후 번역을 시작하세요.", "success");
+
+            } catch (error) {
+                console.error("번역 파일 생성 요청 실패:", error);
+                addLog(`번역 파일 생성 중 오류 발생: ${error.message}`, 'error');
+                showModal("생성 오류", `번역 대상 파일 생성 중 오류가 발생했습니다: ${error.message}`);
+            } finally {
+                translateButton.disabled = false; 
+                generateFilesButton.disabled = false; 
+                buttonText.textContent = originalButtonText; 
+                buttonSpinner.classList.add('hidden');
+                // 모달이 아직 떠있고, 로딩 스피너가 보이지 않는다면 (즉, showModal로 메시지가 업데이트 된 상태) 그대로 둔다.
+                // 만약 로딩 중이었는데 에러 등으로 finally로 왔다면, 모달을 닫거나 에러 메시지 모달을 유지한다.
+                if (completionModal.style.display === 'block' && !modalSpinner.classList.contains('hidden')) {
+                     // 로딩 중 에러 발생 시, showModal에서 이미 isLoading=false로 호출했을 것이므로, 스피너는 숨겨져있을 것.
+                     // 만약 그렇지 않다면(네트워크 에러 등으로 showModal 호출 전 실패), 여기서 처리 필요.
+                     modalSpinner.classList.add('hidden');
+                     modalOkButton.classList.remove('hidden');
+                }
+            }
+        });
+
+
+        function parseCharactersFromFile(content) {
+            const characters = new Set();
+            // Ren'Py 대사 라인 (예: e "대사", "e" "대사", eileen "대사")
+            // 주석 처리된 라인(# char "text")도 포함하여 캐릭터 ID 추출
+            const dialogueRegex = /^\s*(?:#\s*)?([a-zA-Z0-9_]+)\s+"((?:\\"|[^"])*)"/gm;
+            let match;
+            while ((match = dialogueRegex.exec(content)) !== null) {
+                const charId = match[1];
+                // 일반적인 Ren'Py 키워드는 캐릭터 ID에서 제외
+                if (charId && !['define', 'if', 'label', 'scene', 'show', 'hide', 'window', 'style', 'transform', 'image', 'default', 'screen', 'python', 'init', 'menu', 'jump', 'call', 'return', 'voice', 'play', 'stop', 'queue', 'expression', 'old', 'new', 'text', 'say'].includes(charId.toLowerCase())) {
+                    characters.add(charId);
+                }
+            }
+            return characters;
+        }
+
+        function detectNarrationInContent(content) {
+            const lines = content.split(/\r\n|\r|\n/);
+            for (let i = 0; i < lines.length; i++) {
+                const currentLineStripped = lines[i].trim();
+                // 단순 나레이션: "나레이션입니다." (캐릭터 ID 없음)
+                // 주석 처리된 나레이션: # "나레이션입니다."
+                const narrationRegex = /^\s*(?:#\s*)?"((?:\\"|[^"])*)"$/;
+                if (narrationRegex.test(currentLineStripped)) {
+                    // 대사 형식이 아닌지 한 번 더 확인 (앞에 캐릭터 ID가 없는 경우)
+                    const potentialDialogueStart = /^\s*(?:#\s*)?[a-zA-Z0-9_]+\s+"/;
+                    if (!potentialDialogueStart.test(lines[i].trim())) { // lines[i] 사용
+                        // menu: 아래의 선택지는 나레이션이 아님
+                        if (i > 0 && lines[i-1].trim().startsWith("menu:")) {
+                            continue;
+                        }
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+
+        function createPersonaInput(charId, displayName = null) {
+            const div = document.createElement('div');
+            div.classList.add('p-4', 'bg-slate-800', 'rounded-lg', 'shadow-sm', 'border', 'border-slate-700'); 
+            const label = document.createElement('label');
+            label.htmlFor = `persona-${charId}`;
+            const displayLabel = displayName ? `${displayName} (${charId})` : `캐릭터 "${charId}"`;
+            label.textContent = `${displayLabel} 가이드:`;
+            label.classList.add('block', 'text-sm', 'font-medium', 'text-sky-400', 'mb-1.5'); 
+            const textarea = document.createElement('textarea');
+            textarea.id = `persona-${charId}`; 
+            textarea.rows = 2; 
+            textarea.classList.add('form-textarea', 'form-input', 'mt-1', 'block', 'w-full', 'placeholder-slate-500', 'text-sm'); 
+            textarea.placeholder = `"${displayName || charId}"의 어투, 설명 스타일 등을 상세히 기술하세요. (예: ${charId === NARRATION_PERSONA_KEY_UI ? "간결하고 객관적인 문체" : (charId === DEFAULT_FALLBACK_PERSONA_KEY_UI ? "표준적이고 중립적인 톤" : "캐릭터 특징...") })`;
+            div.appendChild(label);
+            div.appendChild(textarea);
+            personaInputsContainer.appendChild(div);
+        }
+
+        savePersonaButton.addEventListener('click', () => {
+            const personasToSave = {};
+            let count = 0;
+            personaInputsContainer.querySelectorAll('textarea').forEach(textarea => {
+                const charId = textarea.id.replace('persona-', '');
+                if (textarea.value.trim()) {
+                    personasToSave[charId] = textarea.value.trim();
+                    count++;
+                }
+            });
+            if (count === 0) {
+                showModal("알림", "저장할 페르소나 가이드가 없습니다.");
+                addLog("저장할 페르소나 데이터 없음.", "warning"); return;
+            }
+            try {
+                const jsonString = JSON.stringify(personasToSave, null, 2);
+                const blob = new Blob([jsonString], { type: 'application/json;charset=utf-8' });
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(blob);
+                link.download = `renpy_personas_${new Date().toISOString().slice(0,10)}.json`; 
+                document.body.appendChild(link); link.click(); document.body.removeChild(link);
+                URL.revokeObjectURL(link.href);
+                addLog(`${count}개의 페르소나 가이드를 JSON 파일로 저장했습니다.`, 'success');
+                showModal("저장 완료", `${count}개의 페르소나 가이드를 JSON 파일로 저장했습니다.`);
+            } catch (error) {
+                addLog(`페르소나 저장 중 오류 발생: ${error.message}`, 'error');
+                showModal("저장 오류", `페르소나를 JSON 파일로 저장하는 중 오류가 발생했습니다: ${error.message}`);
+            }
+        });
+
+        loadPersonaButton.addEventListener('click', () => {
+            personaFileInput.click(); 
+        });
+
+        personaFileInput.addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            if (!file) return;
+            if (!file.name.toLowerCase().endsWith('.json')) {
+                 showModal("오류", "JSON 파일만 불러올 수 있습니다.");
+                 addLog("잘못된 파일 형식: JSON 파일이 아닙니다.", "error");
+                 personaFileInput.value = ''; return;
+            }
+            addLog(`페르소나 파일 불러오기 시도: ${file.name}`);
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const loadedPersonas = JSON.parse(e.target.result);
+                    if (typeof loadedPersonas !== 'object' || loadedPersonas === null) throw new Error("JSON 파일의 형식이 올바르지 않습니다 (객체가 아님).");
+                    let loadedCount = 0; let notFoundCount = 0;
+                    const currentPersonaTextareas = personaInputsContainer.querySelectorAll('textarea');
+                    currentPersonaTextareas.forEach(textarea => {
+                        const charId = textarea.id.replace('persona-', '');
+                        if (loadedPersonas[charId]) { textarea.value = loadedPersonas[charId]; loadedCount++; }
+                    });
+                    Object.keys(loadedPersonas).forEach(charId => {
+                         if (!document.getElementById(`persona-${charId}`)) notFoundCount++;
+                    });
+                    addLog(`${loadedCount}개의 페르소나를 불러왔습니다.`, 'success');
+                    if (notFoundCount > 0) {
+                         addLog(`JSON 파일의 ${notFoundCount}개 페르소나는 현재 UI에 없어 적용되지 않았습니다.`, 'warning');
+                         showModal("불러오기 완료 (일부)", `${loadedCount}개의 페르소나를 불러왔습니다.<br>JSON 파일의 ${notFoundCount}개 페르소나는 현재 UI에 없어 적용되지 않았습니다.`);
+                    } else {
+                         showModal("불러오기 완료", `${loadedCount}개의 페르소나를 성공적으로 불러왔습니다.`);
+                    }
+                } catch (error) {
+                    addLog(`페르소나 파일 불러오기 실패: ${error.message}`, 'error');
+                    showModal("불러오기 오류", `페르소나 파일을 불러오는 중 오류가 발생했습니다: ${error.message}`);
+                } finally { personaFileInput.value = ''; }
+            };
+            reader.onerror = (e) => {
+                 addLog(`페르소나 파일 읽기 오류: ${e.target.error}`, 'error');
+                 showModal("파일 읽기 오류", "페르소나 파일을 읽는 중 오류가 발생했습니다.");
+                 personaFileInput.value = ''; 
+            };
+            reader.readAsText(file);
+        });
+
+        translationForm.addEventListener('submit', async (event) => { 
+            event.preventDefault(); 
+            
+            addLog('--- 전체 번역 요청 시작 ---', 'info');
+            const apiKey = apiKeyInput.value.trim();
+            const selectedModel = modelSelect.value; 
+            const batchSize = parseInt(batchSizeInput.value);
+            const apiDelay = parseFloat(apiDelayInput.value);
+
+            if (filesData.length === 0) { 
+                showModal("오류", "번역할 파일을 선택하거나 생성해주세요."); addLog('번역할 파일 데이터가 없습니다.', 'error'); return; 
+            }
+            addLog('입력 값 유효성 검사 통과.');
+
+            const allPersonasInput = {};
+            personaInputsContainer.querySelectorAll('textarea').forEach(textarea => {
+                const charId = textarea.id.replace('persona-', '');
+                if (textarea.value.trim()) allPersonasInput[charId] = textarea.value.trim();
+            });
+             if(Object.keys(allPersonasInput).length === 0 && personaInputsContainer.querySelectorAll('textarea').length > 0) {
+                addLog('식별된 캐릭터/항목에 대한 페르소나 가이드가 입력되지 않았습니다.', 'warning');
+            }
+
+            addLog(`총 ${filesData.length}개 파일 번역 시작 (모델: <span class="font-medium text-sky-400">${selectedModel}</span>)...`);
+            translateButton.disabled = true;
+            buttonText.textContent = `처리 중...`;
+            buttonSpinner.classList.remove('hidden');
+
+            showModal("번역 진행 중", `총 ${filesData.length}개 파일에 대한 번역을 백엔드에서 처리 중입니다...`, true);
+
+
+            const filesToProcessPayload = filesData.map(fd => ({
+                file_name: fd.file.name, // fd.file은 {name: '...'} 또는 File 객체. 백엔드는 file_name을 기대
+                file_content: fd.content,
+            }));
+
+            const payload = {
+                api_key: apiKey,
+                model_name: selectedModel,
+                files_data: filesToProcessPayload, 
+                personas: allPersonasInput, 
+                batch_size: batchSize,
+                api_delay: apiDelay
+            };
+
+            addLog('백엔드 전송 데이터 준비 완료. 서버에 요청 전송 중...');
+            
+            try {
+                const response = await fetch(`${BACKEND_URL}/translate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                addLog(`백엔드 전체 응답 수신 (상태 코드: ${response.status})`);
+
+                if (!response.ok) {
+                    let errorDetail = '알 수 없는 서버 오류';
+                    try {
+                        const errorData = await response.json();
+                        errorDetail = errorData.error || JSON.stringify(errorData);
+                    } catch (e) { errorDetail = await response.text() || errorDetail; }
+                    throw new Error(`서버 오류 (${response.status}): ${errorDetail}`);
+                }
+
+                const results = await response.json(); 
+                addLog('백엔드 전체 응답 JSON 파싱 완료.');
+
+                if (!Array.isArray(results)) {
+                    throw new Error("백엔드로부터 유효한 결과 리스트를 받지 못했습니다.");
+                }
+                
+                let totalFilesProcessed = 0; 
+                let totalFilesFailed = 0;   
+
+                results.forEach(result => {
+                    if (result.error) {
+                        addLog(`[${result.original_filename || '알 수 없는 파일'}] 처리 중 오류: ${result.error}`, 'error');
+                        totalFilesFailed++;
+                    } else if (result.translated_content && result.translated_filename) {
+                        let logMessage = `[${result.original_filename}] 번역 성공! <span class="font-medium text-green-400">'${result.translated_filename}'</span> 생성됨. 다운로드 준비 중...`;
+                        if (result.error_count > 0 && result.error_log_filename) {
+                            logMessage += ` <span class="text-yellow-400">(주의: ${result.error_count}개 항목 실패. 서버의 '${result.error_log_filename}' 확인 필요)</span>`;
+                            addLog(logMessage, 'warning');
+                        } else {
+                            addLog(logMessage, 'success');
+                        }
+                        downloadFile(result.translated_content, result.translated_filename); 
+                        totalFilesProcessed++;
+                    } else {
+                        addLog(`[${result.original_filename || '알 수 없는 파일'}] 백엔드에서 유효한 번역 결과를 받지 못했습니다.`, 'error');
+                        totalFilesFailed++;
+                    }
+                });
+                let finalMessage = `총 ${filesData.length}개 파일 처리를 시도했습니다.<br>`;
+                finalMessage += `성공: ${totalFilesProcessed}개, 실패: ${totalFilesFailed}개.<br>`;
+                if (totalFilesFailed > 0 || results.some(r => r.error_count > 0 && r.error_count !== undefined)) { // error_count가 0이거나 정의되지 않은 경우 제외
+                    finalMessage += `<br>일부 파일 또는 항목 번역에 실패했습니다. 자세한 내용은 처리 로그 및 서버에 생성된 _errors.txt 파일을 확인하세요.`;
+                }
+                showModal("전체 처리 완료", finalMessage);
+
+
+            } catch (error) {
+                let detailedErrorMessage = error.message;
+                 if (error instanceof TypeError && error.message.toLowerCase().includes("failed to fetch")) {
+                    detailedErrorMessage = "백엔드 서버 연결 실패. 서버 상태 및 네트워크 확인 필요.";
+                 }
+                console.error("전체 번역 요청 실패 상세:", error); 
+                addLog(`전체 번역 처리 중 치명적 오류 발생: ${detailedErrorMessage}`, 'error');
+                showModal("번역 오류", `전체 번역 처리 중 심각한 오류가 발생했습니다: ${detailedErrorMessage}`); 
+            } finally {
+                buttonText.textContent = '번역 시작';
+                buttonSpinner.classList.add('hidden');
+                translateButton.disabled = false;
+                addLog(`--- 전체 번역 요청 종료 ---`, 'info');
+            }
+        }); 
+
+        fixUtilityFileInput.addEventListener('change', async (event) => {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            addLog(`[오류 수정 도구] 파일 선택됨: ${file.name}`, 'info');
+            utilityFixedFileName = file.name.replace(/(\.rpy|\.txt)$/i, '_fixed$1'); 
+
+            try {
+                const content = await file.text();
+                addLog(`[오류 수정 도구] 파일 내용 읽기 완료. 문자열 수정 중...`);
+                
+                const lines = content.split(/\r\n|\r|\n/); 
+                let modifiedLinesCount = 0;
+                const newLines = lines.map(line => {
+                    let match = line.match(/^(\s*)([a-zA-Z0-9_]+|new)\s*"(.*)"(\s*#.*)?$/);
+                    let isNarration = false;
+                    let isOldNewPattern = true; // old "..." 또는 new "..." 패턴인지 확인
+
+                    if (!match) { 
+                        match = line.match(/^(\s*)"(.*)"(\s*#.*)?$/);
+                        if (match) {
+                            isNarration = true;
+                            isOldNewPattern = false;
+                        }
+                    }
+                     // old "..." 패턴 추가 확인
+                    if (!match && line.trim().startsWith("old \"")) {
+                        match = line.match(/^(\s*old\s*)"(.*)"(\s*#.*)?$/);
+                        if (match) {
+                             isOldNewPattern = true; // old 패턴이지만 캐릭터 ID는 없음
+                             isNarration = false; // 명시적으로 narration 아님
+                        }
+                    }
+
+
+                    if (match) {
+                        const indentAndPrefix = match[1]; // 예: "    char_id ", "    new ", "    " (나레이션), "    old "
+                        let stringContent = isNarration ? match[2] : (isOldNewPattern && !match[1].trim().endsWith('"') && match[3] !== undefined ? match[3] : match[2]);
+                        const commentPart = isNarration ? match[3] : (isOldNewPattern && match[4] !== undefined ? match[4] : (match[3] || ""));
+                        
+                        // new "..." 또는 old "..." 에서 stringContent가 잘못 잡히는 경우 수정
+                        if ( (indentAndPrefix.trim() === "new" || indentAndPrefix.trim() === "old") && match[3] === undefined && match.length > 2) {
+                             stringContent = match[2]; // 이 경우 match[2]가 실제 문자열 내용
+                        }
+
+
+                        let originalStringContentForLog = stringContent; 
+
+                        let newStringContent = stringContent;
+                        // 1. 탭 문자를 4개의 공백으로 변환 (문자열 내부에서만)
+                        newStringContent = newStringContent.replace(/\t/g, '    ');
+                        
+                        // 2. 실제 개행 문자를 '\\n' 문자열로 변환
+                        newStringContent = newStringContent.replace(/\n/g, '\\n');
+                        
+                        // 3. 문자열 내부의 "를 \"로 이스케이프 (이미 \" 된 것은 건드리지 않음)
+                        //    백슬래시를 먼저 이스케이프하고 따옴표를 이스케이프하는 순서로 처리
+                        newStringContent = newStringContent.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+                        //    위의 \n 처리로 인해 \\n이 \\\\n이 되었으므로, 다시 \\n으로 돌려줌 (Ren'Py가 \n으로 인식하도록)
+                        //    그리고 \" 처리로 인해 \\\"가 \\\\\"가 되었으므로, 다시 \\\"로 돌려줌
+                        newStringContent = newStringContent.replace(/\\\\n/g, '\\n').replace(/\\\\"/g, '\\"');
+
+
+                        if (newStringContent !== stringContent) { 
+                            modifiedLinesCount++;
+                        }
+                        
+                        if(isNarration) { // "..."
+                            return `${indentAndPrefix}"${newStringContent}"${commentPart}`;
+                        } else if (indentAndPrefix.trim() === "new" || indentAndPrefix.trim() === "old") { // new "..." or old "..."
+                             return `${indentAndPrefix}"${newStringContent}"${commentPart}`;
+                        }
+                        else { // char_id "..."
+                            return `${indentAndPrefix}"${newStringContent}"${commentPart}`; 
+                        }
+                    }
+                    return line; 
+                });
+
+                utilityFixedFileContent = newLines.join('\n'); 
+                fixedContentTextArea.value = utilityFixedFileContent;
+                fixUtilityResultSection.classList.remove('hidden');
+                if (modifiedLinesCount > 0) {
+                    addLog(`[오류 수정 도구] ${modifiedLinesCount}개 라인에서 문자열 수정 완료. 결과를 확인하고 다운로드하세요.`, 'success');
+                } else {
+                    addLog(`[오류 수정 도구] 수정할 내용이 없거나, 패턴에 맞는 문자열을 찾지 못했습니다.`, 'info');
+                }
+            } catch (error) {
+                addLog(`[오류 수정 도구] 파일 처리 중 오류: ${error.message}`, 'error');
+                fixUtilityResultSection.classList.add('hidden');
+            }
+            event.target.value = null; // 파일 입력 초기화
+        });
+
+        downloadFixedButton.addEventListener('click', () => {
+            if (utilityFixedFileContent && utilityFixedFileName) {
+                downloadFile(utilityFixedFileContent, utilityFixedFileName);
+            } else {
+                addLog('[오류 수정 도구] 다운로드할 수정된 내용이 없습니다.', 'warning');
+            }
+        });
+
+
+        function downloadFile(content, fileName) {
+            const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = fileName;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(link.href);
+            addLog(`'${fileName}' 파일 다운로드 시작됨. 브라우저의 다운로드 설정을 확인하세요.`, 'info');
+        }
+
+    </script>
+</body>
+</html>
