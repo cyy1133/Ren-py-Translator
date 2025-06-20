@@ -14,5 +14,9 @@ API key를 얻는 법은 다음 링크를 참조하세요.
 5. 캐릭터에 맞는 서술 방식을 추가합니다.
 6. 번역 버튼을 누릅니다.
 7. ** 참고 귀찮지 않도록 화자 정보를 Json으로 저장해서 다시 사용할 수 있습니다. **
+8. ![image](https://github.com/user-attachments/assets/c4e2117f-7452-42a6-9894-fec1a2ed471c)
+9. ![image](https://github.com/user-attachments/assets/bc9df750-6826-4d9b-8deb-794cae5617db)
+
+
 
 ![Sample](https://github.com/user-attachments/assets/9c6e70b1-523d-434e-92e6-32587d5a11df)
