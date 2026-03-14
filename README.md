@@ -38,12 +38,12 @@ Copyright (c) 2026 cyy1133
 
 The following walkthrough details how each part of the Ren'Py Translation Workbench operates. You can seamlessly switch between tabs without losing your progress.
 
-### 1. Overview (개요)
+### 1. Overview & API Settings (개요)
 
 The Overview tab is the starting point for setting up your environment.
-- **API Configuration:** Select your AI provider (Google Gemini or OpenAI) and authenticate using an API key or Codex CLI OAuth. You can set the target language, batch size limits, and API delay here.
-- **Source Selection:** Input the path to the game's `.exe` or upload extracted `.rpy`/`.txt` files. Clicking "Analyze Game" extracts the script blocks.
-- **Inference Results:** Once analyzed, the workbench automatically infers the project-level world setting, tone, and formatting rules based on the script.
+- **API Configuration:** Select your AI provider (Google Gemini or OpenAI) and securely enter your API key. The UI clearly shows the active state of your key.
+- **Quick Modes:** Offers one-click presets like 'Recommended' (balance of quality and cost), 'Budget Mode' (faster and cheaper), or 'Style Experiment' to automatically configure batch sizes, delays, and models.
+- **Source Selection:** Input the path to the game's `.exe` or upload extracted `.rpy` files. Clicking "Analyze Game" extracts the script blocks.
 
 ![Overview](docs/images/tab_0_overview.png)
 
@@ -59,35 +59,35 @@ This tab gives you a granular view of the project's payload.
 ### 3. Glossary / World (용어집/세계관)
 
 A critical tab to maintain translation consistency across massive scripts.
-- **World & Tone Rules:** Input background era, overall tone guidelines, and formatting preservation rules. The AI incorporates these notes into every translation prompt.
-- **Protected Terms:** List character names or locations (one per line) that the AI should never translate.
-- **Glossary Table:** Define specific source-to-target word mappings (e.g., 'Sword' -> '검') to guarantee consistency.
+- **World & Tone Rules:** Input background era (e.g., modern rural coastal town, romance/fantasy themes), overall tone guidelines (e.g., preserving local rustic dialect), and formatting preservation rules (e.g., leaving Ren'Py tags strictly alone).
+- **Protected Terms:** List character names (Grace, Marion, Malcolm, etc.) or locations that the AI should never translate.
+- **Glossary Table:** Define specific source-to-target word mappings to guarantee consistency.
 
 ![Glossary and World](docs/images/tab_2_glossary.png)
 
 ### 4. Publish / Fonts (배포/폰트)
 
 If you use the `translation_layer` mode, you can configure how the result looks in-game.
-- **Bundle Options:** Set the language code (e.g., `ko_workbench`) to generate a fully formatted Ren'Py language pack.
-- **Font Scaling:** Automatically adjust the font size by comparing the baseline font metrics to your target font.
-- **Font Mapping:** Apply separate fonts to Dialogues, Character Names, UI, and System texts, ensuring the game layout does not break with the new language.
+- **Bundle Options:** Set the language code (e.g., `ko_workbench`) to generate a fully formatted Ren'Py language pack `tl` folder.
+- **Font Presets:** Built-in font coordination presets (like 'Balanced Korean', 'Novel Type', 'Bold Type') automatically map appropriate Korean fonts to Dialogues, Names, UI, and System texts with one click.
+- **Font Scaling:** The workbench calculates math to automatically adjust the target font scale comparing it against the original font (e.g., Dialogue at 1x, Name at 0.96x) so text bounds aren't broken.
 
 ![Publish and Fonts](docs/images/tab_3_publish.png)
 
-### 5. Characters (캐릭터)
+### 5. Characters Workbench (캐릭터)
 
 This workbench isolates character speech so you can tailor the AI's persona.
-- **Character Roster:** A grid of every inferred character along with their dialogue counts.
-- **Tone Presets:** Apply pre-defined tones like "Warm Gentle" or "Formal Period" to specific characters.
-- **Sample Tuning:** Test the tone preset against the character's sample lines before committing to the full translation. This iterative preview loop saves money and time.
+- **AI Persona Inference:** After analysis, the AI automatically infers the character's narrative importance (e.g., 'Main Character') and tonal nuance (e.g., 'Romantic/Sensual').
+- **Tone Presets:** Apply pre-defined tones like "Cold and Direct" or "Playful / Seductive" to specific characters, and append manual notes (e.g., "Do not soften her directness.")
+- **Sample Tuning:** Retranslate only 5-6 sample lines for that specific character to test the preset before committing to the full translation. This iterative preview loop saves massive amounts of money and time.
 
 ![Character Workbench](docs/images/tab_4_characters.png)
 
 ### 6. Adult Queue (성인 큐)
 
 A safety and compliance feature.
-- **Isolated Lines:** Any dialogue triggering adult-content keywords is separated from the main AI batch.
-- **Manual Oversight:** Review sexually explicit or highly sensitive lines safely. You can manually translate these within the UI to bypass AI censorship filters completely.
+- **Isolated Lines:** Any dialogue triggering adult-content keywords (e.g., 'breast') is separated from the main AI batch.
+- **Context & Manual Overview:** Safely review the sexually explicit or sensitive line alongside the previous and next lines of context. You can manually translate these within the editor text area and click "Save This Line" to bypass AI censorship filters completely.
 
 ![Adult Queue](docs/images/tab_5_adult.png)
 
