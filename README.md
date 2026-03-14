@@ -34,57 +34,80 @@ Copyright (c) 2026 cyy1133
    - `Results / Logs`: translation results, checkpoints, and runtime logs
 6. Start translation or review lines manually.
 
-## Screenshots
+## User Guide & Screenshots
 
-The screenshots below were captured from a live work-in-progress session without stopping the running backend process.
+The following walkthrough details how each part of the Ren'Py Translation Workbench operates. You can seamlessly switch between tabs without losing your progress.
 
-### Overview
+### 1. Overview (개요)
 
-Project-level summary, inferred world setting, tone defaults, and format rules.
+The Overview tab is the starting point for setting up your environment.
+- **API Configuration:** Select your AI provider (Google Gemini or OpenAI) and authenticate using an API key or Codex CLI OAuth. You can set the target language, batch size limits, and API delay here.
+- **Source Selection:** Input the path to the game's `.exe` or upload extracted `.rpy`/`.txt` files. Clicking "Analyze Game" extracts the script blocks.
+- **Inference Results:** Once analyzed, the workbench automatically infers the project-level world setting, tone, and formatting rules based on the script.
 
-![Overview](docs/screenshots/01-overview.png)
+![Overview](docs/images/tab_0_overview.png)
 
-### Dialogue / Files
+### 2. Dialogs / Files (대사/파일)
 
-File-level scope selection, translation rule control, and dialogue preview across the currently analyzed script set.
+This tab gives you a granular view of the project's payload.
+- **File Selection:** Pick specific `.rpy` files you want to include in the active translation batch.
+- **Dialogue Preview:** Browse the extracted lines to review the context and source text before passing it to the AI.
+- **Scope View:** It shows exactly how many dialogues are un-translated compared to those translated by the game or by the workbench.
 
-![Dialogue and Files](docs/screenshots/02-dialogue-files.png)
+![Dialogue and Files](docs/images/tab_1_dialogs.png)
 
-### Glossary / World
+### 3. Glossary / World (용어집/세계관)
 
-Global world notes, protected terms, glossary entries, and provider-facing translation guidance.
+A critical tab to maintain translation consistency across massive scripts.
+- **World & Tone Rules:** Input background era, overall tone guidelines, and formatting preservation rules. The AI incorporates these notes into every translation prompt.
+- **Protected Terms:** List character names or locations (one per line) that the AI should never translate.
+- **Glossary Table:** Define specific source-to-target word mappings (e.g., 'Sword' -> '검') to guarantee consistency.
 
-![Glossary and World](docs/screenshots/03-glossary-world.png)
+![Glossary and World](docs/images/tab_2_glossary.png)
 
-### Publish / Fonts
+### 4. Publish / Fonts (배포/폰트)
 
-Ren'Py language bundle settings, language code selection, and per-area font mapping for dialogue, names, choices, UI, and system text.
+If you use the `translation_layer` mode, you can configure how the result looks in-game.
+- **Bundle Options:** Set the language code (e.g., `ko_workbench`) to generate a fully formatted Ren'Py language pack.
+- **Font Scaling:** Automatically adjust the font size by comparing the baseline font metrics to your target font.
+- **Font Mapping:** Apply separate fonts to Dialogues, Character Names, UI, and System texts, ensuring the game layout does not break with the new language.
 
-![Publish and Fonts](docs/screenshots/04-publish-font.png)
+![Publish and Fonts](docs/images/tab_3_publish.png)
 
-### Character Workbench
+### 5. Characters (캐릭터)
 
-Character roster, thumbnails, role and tone notes, preset selection, and prompt tuning per speaker.
+This workbench isolates character speech so you can tailor the AI's persona.
+- **Character Roster:** A grid of every inferred character along with their dialogue counts.
+- **Tone Presets:** Apply pre-defined tones like "Warm Gentle" or "Formal Period" to specific characters.
+- **Sample Tuning:** Test the tone preset against the character's sample lines before committing to the full translation. This iterative preview loop saves money and time.
 
-![Character Workbench](docs/screenshots/05-character.png)
+![Character Workbench](docs/images/tab_4_characters.png)
 
-### Adult Queue
+### 6. Adult Queue (성인 큐)
 
-Adult-sensitive or separately reviewed lines are isolated here. You can review the source, inspect the connected translation, and type a manual translation directly.
+A safety and compliance feature.
+- **Isolated Lines:** Any dialogue triggering adult-content keywords is separated from the main AI batch.
+- **Manual Oversight:** Review sexually explicit or highly sensitive lines safely. You can manually translate these within the UI to bypass AI censorship filters completely.
 
-![Adult Queue](docs/screenshots/06-adult-queue.png)
+![Adult Queue](docs/images/tab_5_adult.png)
 
-### Editor / QA
+### 7. Editor / QA (편집/검수)
 
-A dedicated source/translation editor for connected or workbench-translated files. Saving applies the edits directly to the current game output.
+A built-in side-by-side translation editor.
+- **Live Updating:** Open any `.rpy` file and see the source text next to its translation.
+- **Status Filters:** Show only missing translations, or filter by adult queue and AI-generated lines.
+- **Immediate Save:** Saving a row updates the staging files immediately, making QA directly impactful without re-running scripts.
 
-![Editor and QA](docs/screenshots/07-editor.png)
+![Editor and QA](docs/images/tab_6_editor.png)
 
-### Results / Logs
+### 8. Results / Logs (결과/로그)
 
-Translation session status, per-file results, checkpoints, and runtime logging for long-running jobs.
+The operational heart for running the actual translation jobs.
+- **Rule Selection:** Choose whether to translate only missing strings or force a total re-translation.
+- **Execution:** Hit "Translate" to dispatch the lines to the LLM.
+- **Live Logging:** Monitor the batch progress, API latency, retries, and errors in real time. 
 
-![Results and Logs](docs/screenshots/08-results-log.png)
+![Results and Logs](docs/images/tab_7_results.png)
 
 ## Character Tone Workflow
 
