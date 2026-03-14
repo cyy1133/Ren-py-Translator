@@ -19,6 +19,7 @@ const DEFAULT_RUNTIME_SETTINGS = {
     openai_api_key: { batchSize: 12, apiDelay: 0.3 },
     openai_oauth_cli: { batchSize: 12, apiDelay: 0 },
 };
+const API_KEY_STORAGE_PREFIX = "renpy-workbench-api-key:v1";
 const TRANSLATION_PRESETS = [
     {
         id: "gemini_quality",
@@ -163,6 +164,12 @@ const state = {
     selectedTranslationPresetId: DEFAULT_TRANSLATION_PRESET_ID,
     tonePreviewByCharacter: {},
     tonePreviewLoadingSpeakerId: null,
+    editorDocument: null,
+    editorFilePath: "",
+    editorSelectedItemId: null,
+    editorStatusFilter: "all",
+    editorSearchQuery: "",
+    editorDrafts: {},
 };
 
 const dom = {
@@ -171,6 +178,10 @@ const dom = {
     openaiAuthModeSelect: document.getElementById("openaiAuthModeSelect"),
     apiKeyField: document.getElementById("apiKeyField"),
     apiKeyInput: document.getElementById("apiKeyInput"),
+    saveApiKeyButton: document.getElementById("saveApiKeyButton"),
+    loadApiKeyButton: document.getElementById("loadApiKeyButton"),
+    clearApiKeyButton: document.getElementById("clearApiKeyButton"),
+    apiKeyStorageStatus: document.getElementById("apiKeyStorageStatus"),
     openaiOAuthPanel: document.getElementById("openaiOAuthPanel"),
     openaiOAuthCommandInput: document.getElementById("openaiOAuthCommandInput"),
     setupOpenAIOAuthButton: document.getElementById("setupOpenAIOAuthButton"),
@@ -196,6 +207,9 @@ const dom = {
     summaryItems: document.getElementById("summaryItems"),
     summaryCharacters: document.getElementById("summaryCharacters"),
     summaryAdult: document.getElementById("summaryAdult"),
+    summaryUntranslated: document.getElementById("summaryUntranslated"),
+    summaryGameTranslated: document.getElementById("summaryGameTranslated"),
+    summaryWorkbenchTranslated: document.getElementById("summaryWorkbenchTranslated"),
     tabButtons: Array.from(document.querySelectorAll(".tab-button")),
     tabPanels: Array.from(document.querySelectorAll(".tab-panel")),
     worldInferenceText: document.getElementById("worldInferenceText"),
@@ -232,7 +246,15 @@ const dom = {
     fontSuggestionList: document.getElementById("fontSuggestionList"),
     styleSuggestionList: document.getElementById("styleSuggestionList"),
     adultQueue: document.getElementById("adultQueue"),
+    editorFileSelect: document.getElementById("editorFileSelect"),
+    editorStatusFilter: document.getElementById("editorStatusFilter"),
+    editorSearchInput: document.getElementById("editorSearchInput"),
+    loadEditorButton: document.getElementById("loadEditorButton"),
+    saveEditorButton: document.getElementById("saveEditorButton"),
+    editorSummary: document.getElementById("editorSummary"),
+    documentEditor: document.getElementById("documentEditor"),
     characterGrid: document.getElementById("characterGrid"),
+    translationRuleSelect: document.getElementById("translationRuleSelect"),
     translateButton: document.getElementById("translateButton"),
     translationHint: document.getElementById("translationHint"),
     resultsPanel: document.getElementById("resultsPanel"),
@@ -355,6 +377,169 @@ function buildCharacterAvatarMarkup(character, variant = "small") {
 
 function getOpenAIAuthMode() {
     return dom.openaiAuthModeSelect?.value || "api_key";
+}
+
+
+function supportsApiKey(provider = dom.providerSelect?.value || "gemini", authMode = getOpenAIAuthMode()) {
+    return provider === "gemini" || (provider === "openai" && authMode === "api_key");
+}
+
+
+function getApiKeyStorageScope(provider = dom.providerSelect?.value || "gemini", authMode = getOpenAIAuthMode()) {
+    if (provider === "openai") {
+        return `openai:${authMode}`;
+    }
+    return provider || "gemini";
+}
+
+
+function getApiKeyStorageLabel(provider = dom.providerSelect?.value || "gemini", authMode = getOpenAIAuthMode()) {
+    if (provider === "openai" && authMode === "api_key") {
+        return "OpenAI API 키";
+    }
+    return "Gemini API 키";
+}
+
+
+function getApiKeyStorageKey(provider = dom.providerSelect?.value || "gemini", authMode = getOpenAIAuthMode()) {
+    return `${API_KEY_STORAGE_PREFIX}:${getApiKeyStorageScope(provider, authMode)}`;
+}
+
+
+function getStoredApiKey(provider = dom.providerSelect?.value || "gemini", authMode = getOpenAIAuthMode()) {
+    try {
+        return window.localStorage.getItem(getApiKeyStorageKey(provider, authMode)) || "";
+    } catch (error) {
+        return "";
+    }
+}
+
+
+function clearFailedTonePreviewCache() {
+    let changed = false;
+    Object.entries(state.tonePreviewByCharacter || {}).forEach(([speakerId, previewState]) => {
+        const hasErrors = Boolean(previewState?.variants?.some((variant) => variant.error));
+        if (previewState?.cacheable === false || hasErrors) {
+            delete state.tonePreviewByCharacter[speakerId];
+            changed = true;
+        }
+    });
+    return changed;
+}
+
+
+function renderApiKeyStorageStatus() {
+    if (!dom.apiKeyStorageStatus) {
+        return;
+    }
+
+    if (!supportsApiKey()) {
+        dom.apiKeyStorageStatus.textContent = "Codex OAuth 모드에서는 API 키 저장을 사용하지 않습니다.";
+        return;
+    }
+
+    const label = getApiKeyStorageLabel();
+    const savedKey = getStoredApiKey();
+    const currentKey = dom.apiKeyInput.value.trim();
+    if (!savedKey) {
+        dom.apiKeyStorageStatus.textContent = `${label}가 이 브라우저에 저장되어 있지 않습니다.`;
+        return;
+    }
+    if (!currentKey) {
+        dom.apiKeyStorageStatus.textContent = `저장된 ${label}가 있습니다. ‘키 불러오기’를 누르면 입력칸에 채웁니다.`;
+        return;
+    }
+    if (currentKey === savedKey) {
+        dom.apiKeyStorageStatus.textContent = `현재 입력값이 저장된 ${label}와 같습니다.`;
+        return;
+    }
+    dom.apiKeyStorageStatus.textContent = `현재 입력값이 저장된 ${label}와 다릅니다. 저장 또는 불러오기를 선택하세요.`;
+}
+
+
+function handleApiKeyMutation({ rerender = true } = {}) {
+    const clearedFailedPreview = clearFailedTonePreviewCache();
+    renderApiKeyStorageStatus();
+    if (rerender && clearedFailedPreview && state.analysis && state.selectedCharacterId) {
+        renderSelectedCharacterDetail();
+    }
+}
+
+
+function saveCurrentApiKeyToStorage() {
+    if (!supportsApiKey()) {
+        addLog("현재 인증 방식에서는 API 키 저장을 사용하지 않습니다.", "warning");
+        renderApiKeyStorageStatus();
+        return;
+    }
+
+    const value = dom.apiKeyInput.value.trim();
+    if (!value) {
+        addLog("저장할 API 키를 먼저 입력하세요.", "warning");
+        return;
+    }
+
+    try {
+        window.localStorage.setItem(getApiKeyStorageKey(), value);
+        renderApiKeyStorageStatus();
+        addLog(`${getApiKeyStorageLabel()} 저장 완료`, "success");
+    } catch (error) {
+        addLog(`API 키 저장 실패: ${error.message}`, "error");
+    }
+}
+
+
+function loadStoredApiKeyForCurrentScope({ silent = false, rerender = true } = {}) {
+    if (!supportsApiKey()) {
+        renderApiKeyStorageStatus();
+        return false;
+    }
+
+    const value = getStoredApiKey();
+    if (!value) {
+        if (!silent) {
+            addLog(`저장된 ${getApiKeyStorageLabel()}가 없습니다.`, "warning");
+        }
+        renderApiKeyStorageStatus();
+        return false;
+    }
+
+    dom.apiKeyInput.value = value;
+    handleApiKeyMutation({ rerender });
+    if (!silent) {
+        addLog(`${getApiKeyStorageLabel()} 불러오기 완료`, "success");
+    }
+    return true;
+}
+
+
+function clearStoredApiKeyForCurrentScope() {
+    if (!supportsApiKey()) {
+        renderApiKeyStorageStatus();
+        return;
+    }
+
+    try {
+        window.localStorage.removeItem(getApiKeyStorageKey());
+        dom.apiKeyInput.value = "";
+        handleApiKeyMutation();
+        addLog(`${getApiKeyStorageLabel()} 삭제 완료`, "success");
+    } catch (error) {
+        addLog(`저장된 API 키 삭제 실패: ${error.message}`, "error");
+    }
+}
+
+
+function syncStoredApiKeyForCurrentScope() {
+    if (!supportsApiKey()) {
+        dom.apiKeyInput.value = "";
+        renderApiKeyStorageStatus();
+        return false;
+    }
+
+    dom.apiKeyInput.value = getStoredApiKey();
+    handleApiKeyMutation({ rerender: false });
+    return Boolean(dom.apiKeyInput.value.trim());
 }
 
 
@@ -770,6 +955,7 @@ function updateProviderUI() {
     } else {
         dom.translationHint.textContent = "Gemini/API 모드에서는 배치 상한과 글자수 budget을 함께 보고 긴 대사는 더 작은 청크로 자동 분할합니다.";
     }
+    renderApiKeyStorageStatus();
     renderTranslationPresetSummary();
 }
 
@@ -1218,12 +1404,107 @@ function renderSummary() {
         dom.summaryItems.textContent = "0";
         dom.summaryCharacters.textContent = "0";
         dom.summaryAdult.textContent = "0";
+        dom.summaryUntranslated.textContent = "0";
+        dom.summaryGameTranslated.textContent = "0";
+        dom.summaryWorkbenchTranslated.textContent = "0";
         return;
     }
     dom.summaryFiles.textContent = String(state.analysis.summary.file_count || 0);
     dom.summaryItems.textContent = String(state.analysis.summary.item_count || 0);
     dom.summaryCharacters.textContent = String((state.analysis.characters || []).length);
     dom.summaryAdult.textContent = String(state.analysis.summary.adult_item_count || 0);
+    dom.summaryUntranslated.textContent = String(state.analysis.summary.untranslated_item_count || 0);
+    dom.summaryGameTranslated.textContent = String(state.analysis.summary.game_translated_item_count || 0);
+    dom.summaryWorkbenchTranslated.textContent = String(state.analysis.summary.workbench_translated_item_count || 0);
+}
+
+
+function getTranslationSourceDetail(source) {
+    const raw = String(source || "").trim();
+    if (!raw.includes(":")) {
+        return "";
+    }
+    return raw.split(":").slice(1).join(":").trim();
+}
+
+
+function hasMeaningfulTranslation(text, sourceText = "") {
+    const normalizedText = String(text || "").trim();
+    if (!normalizedText) {
+        return false;
+    }
+    return normalizedText !== String(sourceText || "").trim();
+}
+
+
+function buildTranslationPreviewLines(item) {
+    const lines = [];
+    if (hasMeaningfulTranslation(item.connected_translation_text, item.source_text)) {
+        const sourceLabel = item.connected_translation_source ? `게임 연결 (${item.connected_translation_source})` : "게임 연결";
+        lines.push(`
+            <div class="translation-preview-line">
+                <strong>${escapeHtml(sourceLabel)}</strong>
+                <span>${escapeHtml(item.connected_translation_text)}</span>
+            </div>
+        `);
+    }
+    if (
+        hasMeaningfulTranslation(item.workbench_translation_text, item.source_text)
+        && item.workbench_translation_text !== item.connected_translation_text
+    ) {
+        const sourceLabel = item.workbench_translation_source ? `워크벤치 출력 (${item.workbench_translation_source})` : "워크벤치 출력";
+        lines.push(`
+            <div class="translation-preview-line">
+                <strong>${escapeHtml(sourceLabel)}</strong>
+                <span>${escapeHtml(item.workbench_translation_text)}</span>
+            </div>
+        `);
+    }
+    if (!lines.length) {
+        lines.push('<div class="helper-text">현재 연결된 번역이 없습니다.</div>');
+    }
+    return `<div class="translation-preview-stack">${lines.join("")}</div>`;
+}
+
+
+function renderFileTable() {
+    if (!state.analysis || !state.analysis.files?.length) {
+        dom.fileTable.className = "file-table empty-state";
+        dom.fileTable.textContent = "분석 결과가 아직 없습니다.";
+        return;
+    }
+    dom.fileTable.className = "file-table";
+    dom.fileTable.innerHTML = "";
+    state.analysis.files.forEach((file) => {
+        const checked = state.selectedFiles.has(file.file_relative_path) ? "checked" : "";
+        const topPreview = (file.preview_items || []).slice(0, 2)
+            .map((item) => `
+                <div class="helper-text">
+                    ${item.speaker_name || item.speaker_id || item.kind}: ${item.source_preview}
+                    <span class="pill subtle">${escapeHtml(getTranslationStatusLabel(item.translation_status))}</span>
+                </div>
+            `)
+            .join("");
+        const row = document.createElement("label");
+        row.className = "file-row";
+        row.innerHTML = `
+            <input type="checkbox" data-path="${file.file_relative_path}" ${checked}>
+            <div>
+                <strong>${file.file_name}</strong>
+                <div class="helper-text">${file.file_relative_path}</div>
+                ${topPreview}
+            </div>
+            <div class="pill-list compact">
+                <span class="pill">${file.file_mode}</span>
+                <span class="pill subtle">미번역 ${file.untranslated_item_count || 0}</span>
+                <span class="pill subtle">기존 ${file.game_translated_item_count || 0}</span>
+                <span class="pill subtle">워크벤치 ${file.workbench_translated_item_count || 0}</span>
+            </div>
+            <div><strong>${file.item_count}</strong><div class="helper-text">항목</div></div>
+            <div><strong>${file.adult_item_count}</strong><div class="helper-text">성인 큐</div></div>
+        `;
+        dom.fileTable.appendChild(row);
+    });
 }
 
 
@@ -1291,7 +1572,12 @@ function renderFileTable() {
     state.analysis.files.forEach((file) => {
         const checked = state.selectedFiles.has(file.file_relative_path) ? "checked" : "";
         const topPreview = (file.preview_items || []).slice(0, 2)
-            .map((item) => `<div class="helper-text">${item.speaker_name || item.speaker_id || item.kind}: ${item.source_preview}</div>`)
+            .map((item) => `
+                <div class="helper-text">
+                    ${item.speaker_name || item.speaker_id || item.kind}: ${item.source_preview}
+                    <span class="pill subtle">${escapeHtml(getTranslationStatusLabel(item.translation_status, item.translation_source))}</span>
+                </div>
+            `)
             .join("");
         const row = document.createElement("label");
         row.className = "file-row";
@@ -1302,11 +1588,61 @@ function renderFileTable() {
                 <div class="helper-text">${file.file_relative_path}</div>
                 ${topPreview}
             </div>
-            <div><span class="pill">${file.file_mode}</span></div>
+            <div class="pill-list compact">
+                <span class="pill">${file.file_mode}</span>
+                <span class="pill subtle">미번역 ${file.untranslated_item_count || 0}</span>
+                <span class="pill subtle">연결 ${file.game_translated_item_count || 0}</span>
+                <span class="pill subtle">워크벤치 ${file.workbench_translated_item_count || 0}</span>
+            </div>
             <div><strong>${file.item_count}</strong><div class="helper-text">항목</div></div>
             <div><strong>${file.adult_item_count}</strong><div class="helper-text">성인 큐</div></div>
         `;
         dom.fileTable.appendChild(row);
+    });
+}
+
+
+function renderUploadList() {
+    if (!state.uploadedFiles.length) {
+        dom.uploadList.innerHTML = '<p class="muted">업로드된 파일이 없습니다.</p>';
+        return;
+    }
+    dom.uploadList.innerHTML = "";
+    state.uploadedFiles.forEach((file) => {
+        const row = document.createElement("div");
+        row.className = "dialogue-row";
+        row.innerHTML = `
+            <div><strong>${file.file_name}</strong></div>
+            <div class="helper-text">${(file.file_content || "").length.toLocaleString()} chars</div>
+        `;
+        dom.uploadList.appendChild(row);
+    });
+}
+
+
+function renderDialoguePreview() {
+    const previewItems = state.analysis?.dialogue_preview || [];
+    if (!previewItems.length) {
+        dom.dialoguePreviewList.className = "dialogue-preview empty-state";
+        dom.dialoguePreviewList.textContent = "분석 결과가 아직 없습니다.";
+        return;
+    }
+    dom.dialoguePreviewList.className = "dialogue-preview";
+    dom.dialoguePreviewList.innerHTML = "";
+    previewItems.slice(0, 24).forEach((item) => {
+        const row = document.createElement("div");
+        row.className = "dialogue-row";
+        const translationBadge = getTranslationStatusLabel(item.translation_status, item.translation_source);
+        const translationPreview = buildTranslationPreviewLines(item);
+        row.innerHTML = `
+            <div class="dialogue-row-header">
+                <div><strong>${item.speaker_name || item.speaker_id || "Narration"}</strong> · ${item.file_relative_path}:${item.line_number}</div>
+                <div class="pill-list compact"><span class="pill subtle">${escapeHtml(translationBadge)}</span></div>
+            </div>
+            <div class="helper-text">${item.source_text}</div>
+            ${translationPreview}
+        `;
+        dom.dialoguePreviewList.appendChild(row);
     });
 }
 
@@ -1416,12 +1752,410 @@ function getCharacterBySpeakerId(speakerId) {
 }
 
 
+function getTranslationRuleValue() {
+    return dom.translationRuleSelect?.value || "missing_only";
+}
+
+
+function getTranslationRuleLabel(rule) {
+    if (rule === "retranslate_existing") {
+        return "기존 번역만 재번역";
+    }
+    if (rule === "force_all") {
+        return "범위 전체 새로 번역";
+    }
+    return "미번역만 번역";
+}
+
+
+function getTranslationStatusLabel(status, source = "") {
+    const sourceDetail = getTranslationSourceDetail(source);
+    if (status === "workbench_translated") {
+        return sourceDetail ? `워크벤치 출력 · ${sourceDetail}` : "워크벤치 출력";
+    }
+    if (status === "game_translated") {
+        return sourceDetail ? `게임 연결 번역 · ${sourceDetail}` : "게임 연결 번역";
+    }
+    return "미번역";
+}
+
+
+function getEditableDisplayText(item) {
+    if (hasMeaningfulTranslation(item.workbench_translation_text, item.source_text)) {
+        return item.workbench_translation_text;
+    }
+    if (hasMeaningfulTranslation(item.connected_translation_text, item.source_text)) {
+        return item.connected_translation_text;
+    }
+    if (hasMeaningfulTranslation(item.effective_translation_text, item.source_text)) {
+        return item.effective_translation_text;
+    }
+    if (item.translation_status !== "untranslated" && hasMeaningfulTranslation(item.current_text, item.source_text)) {
+        return item.current_text;
+    }
+    return "";
+}
+
+
+function buildManualEditPayload(edits) {
+    if (!state.analysis) {
+        throw new Error("먼저 게임 분석을 실행하세요.");
+    }
+    const gamePath = dom.gamePathInput.value.trim();
+    if (!gamePath) {
+        throw new Error("게임 경로 분석 모드에서만 수동 저장을 지원합니다.");
+    }
+    return {
+        game_exe_path: gamePath,
+        target_language: dom.targetLanguageInput.value.trim() || "ko",
+        publish_settings: collectPublishSettings(),
+        edits,
+    };
+}
+
+
+function buildCurrentAnalysisPayload({ requireGamePath = false } = {}) {
+    if (!state.analysis) {
+        throw new Error("먼저 게임 분석을 실행하세요.");
+    }
+
+    const payload = {
+        target_language: dom.targetLanguageInput.value.trim() || "ko",
+    };
+    const gamePath = dom.gamePathInput.value.trim();
+    if (gamePath) {
+        payload.game_exe_path = gamePath;
+        return payload;
+    }
+    if (!requireGamePath && state.uploadedFiles.length) {
+        payload.files_data = state.uploadedFiles;
+        return payload;
+    }
+    if (requireGamePath) {
+        throw new Error("이 기능은 게임 경로 분석 모드에서만 사용할 수 있습니다.");
+    }
+    throw new Error("분석 대상 파일을 찾지 못했습니다.");
+}
+
+
+function renderEditorFileOptions() {
+    if (!dom.editorFileSelect) {
+        return;
+    }
+    const files = state.analysis?.files || [];
+    const currentValue = state.editorFilePath || dom.editorFileSelect.value || "";
+    dom.editorFileSelect.innerHTML = '<option value="">파일 선택</option>';
+    files.forEach((file) => {
+        const option = document.createElement("option");
+        option.value = file.file_relative_path;
+        option.textContent = `${file.file_name} (${file.item_count})`;
+        dom.editorFileSelect.appendChild(option);
+    });
+    dom.editorFileSelect.value = files.some((file) => file.file_relative_path === currentValue) ? currentValue : "";
+}
+
+
+function getEditorItems() {
+    return state.editorDocument?.items || [];
+}
+
+
+function getEditorDraftValue(item) {
+    if (!item) {
+        return "";
+    }
+    return state.editorDrafts[item.item_id] ?? item.editable_text ?? getEditableDisplayText(item);
+}
+
+
+function isEditorItemDirty(item) {
+    if (!item) {
+        return false;
+    }
+    return getEditorDraftValue(item).trim() !== (item.editable_text || "").trim();
+}
+
+
+function buildEditorSummaryText(documentPayload, visibleCount) {
+    const dirtyCount = (documentPayload?.items || []).filter((item) => isEditorItemDirty(item)).length;
+    return `${documentPayload.file_relative_path} · 표시 ${visibleCount}/${documentPayload.item_count}줄 · 변경 ${dirtyCount}건 · 저장 시 워크벤치 출력과 publish bundle에 바로 반영됩니다.`;
+}
+
+
+function getVisibleEditorItems() {
+    const items = getEditorItems();
+    const statusFilter = state.editorStatusFilter || "all";
+    const query = (state.editorSearchQuery || "").trim().toLowerCase();
+    return items.filter((item) => {
+        if (statusFilter === "adult" && !item.adult) {
+            return false;
+        }
+        if (statusFilter !== "all" && statusFilter !== "adult" && item.translation_status !== statusFilter) {
+            return false;
+        }
+        if (!query) {
+            return true;
+        }
+        const draftValue = getEditorDraftValue(item);
+        const haystack = [
+            item.speaker_name,
+            item.speaker_id,
+            item.source_text,
+            draftValue,
+            item.line_number,
+            item.file_relative_path,
+        ]
+            .map((value) => String(value || "").toLowerCase())
+            .join(" ");
+        return haystack.includes(query);
+    });
+}
+
+
+function renderDocumentEditor() {
+    if (!dom.documentEditor || !dom.editorSummary) {
+        return;
+    }
+    renderEditorFileOptions();
+    if (!state.analysis) {
+        dom.editorSummary.textContent = "게임 분석 후 파일을 선택하면 원문/번역문 편집기를 사용할 수 있습니다.";
+        dom.documentEditor.className = "document-editor empty-state";
+        dom.documentEditor.textContent = "편집할 파일을 먼저 불러오세요.";
+        return;
+    }
+
+    const documentPayload = state.editorDocument;
+    if (!documentPayload) {
+        dom.editorSummary.textContent = "파일을 선택하고 ‘파일 열기’를 누르면 원문/번역문을 함께 편집할 수 있습니다.";
+        dom.documentEditor.className = "document-editor empty-state";
+        dom.documentEditor.textContent = "편집할 파일을 먼저 불러오세요.";
+        return;
+    }
+
+    const visibleItems = getVisibleEditorItems();
+    if (!visibleItems.some((item) => item.item_id === state.editorSelectedItemId)) {
+        state.editorSelectedItemId = visibleItems[0]?.item_id || documentPayload.items[0]?.item_id || null;
+    }
+    const selectedItem = documentPayload.items.find((item) => item.item_id === state.editorSelectedItemId) || visibleItems[0] || null;
+    const dirtyCount = documentPayload.items.filter((item) => getEditorDraftValue(item).trim() !== (item.editable_text || "").trim()).length;
+    dom.editorSummary.textContent = `${documentPayload.file_relative_path} · ${visibleItems.length}/${documentPayload.item_count}줄 표시 · 변경 ${dirtyCount}건 · 저장 시 워크벤치 출력과 publish bundle에 즉시 반영됩니다.`;
+
+    dom.editorSummary.textContent = buildEditorSummaryText(documentPayload, visibleItems.length);
+
+    const listHtml = visibleItems.length
+        ? visibleItems.map((item) => {
+            const draftValue = getEditorDraftValue(item);
+            const isDirty = draftValue.trim() !== (item.editable_text || "").trim();
+            return `
+                <button
+                    type="button"
+                    class="editor-item${item.item_id === selectedItem?.item_id ? " is-selected" : ""}${isDirty ? " is-dirty" : ""}"
+                    data-action="select-editor-item"
+                    data-item-id="${escapeHtml(item.item_id)}"
+                >
+                    <div class="editor-item-title">
+                        <strong>${escapeHtml(item.speaker_name || item.speaker_id || item.kind || "Narration")}</strong>
+                        <span class="pill subtle">${escapeHtml(getTranslationStatusLabel(item.translation_status, item.translation_source))}</span>
+                    </div>
+                    <div class="helper-text">${escapeHtml(item.file_relative_path)}:${escapeHtml(item.line_number)}</div>
+                    <div class="editor-item-snippet">${escapeHtml(item.source_preview || item.source_text)}</div>
+                </button>
+            `;
+        }).join("")
+        : '<div class="empty-state">현재 필터에서 표시할 줄이 없습니다.</div>';
+
+    const selectedDraft = selectedItem ? getEditorDraftValue(selectedItem) : "";
+    const detailHtml = selectedItem ? `
+        <div class="editor-detail-grid">
+            <div>
+                <p class="section-kicker">Selected Line</p>
+                <h3>${escapeHtml(selectedItem.speaker_name || selectedItem.speaker_id || selectedItem.kind || "Narration")}</h3>
+                <div class="helper-text">${escapeHtml(selectedItem.file_relative_path)}:${escapeHtml(selectedItem.line_number)} · ${escapeHtml(getTranslationStatusLabel(selectedItem.translation_status, selectedItem.translation_source))}</div>
+            </div>
+            <div class="editor-source-box">
+                <strong>원문</strong>
+                <p>${escapeHtml(selectedItem.source_text)}</p>
+            </div>
+            <div class="translation-preview-stack">
+                ${buildTranslationPreviewLines(selectedItem)}
+            </div>
+            <label class="field">
+                <span>편집 번역문</span>
+                <textarea data-role="editor-text" data-item-id="${escapeHtml(selectedItem.item_id)}" rows="7" placeholder="직접 번역문을 입력하면 저장 시 바로 게임 출력에 반영됩니다.">${escapeHtml(selectedDraft)}</textarea>
+            </label>
+            <div class="editor-context-grid">
+                <div class="editor-source-box">
+                    <strong>이전 문맥</strong>
+                    <p>${escapeHtml((selectedItem.context_before || []).join("\n") || "없음")}</p>
+                </div>
+                <div class="editor-source-box">
+                    <strong>다음 문맥</strong>
+                    <p>${escapeHtml((selectedItem.context_after || []).join("\n") || "없음")}</p>
+                </div>
+            </div>
+            <div class="editor-detail-actions">
+                <button type="button" class="secondary-button" data-action="save-editor-item" data-item-id="${escapeHtml(selectedItem.item_id)}">현재 줄 저장</button>
+            </div>
+        </div>
+    ` : '<div class="empty-state">편집할 줄을 왼쪽 목록에서 선택하세요.</div>';
+
+    dom.documentEditor.className = "document-editor";
+    dom.documentEditor.innerHTML = `
+        <div class="document-editor-shell">
+            <aside class="editor-list-pane">
+                <div class="inline-header">
+                    <h3>줄 목록</h3>
+                    <span class="helper-text">${visibleItems.length}줄</span>
+                </div>
+                <div class="editor-list">${listHtml}</div>
+            </aside>
+            <section class="editor-detail">
+                ${detailHtml}
+            </section>
+        </div>
+    `;
+}
+
+
+async function loadEditableDocument(
+    filePath = dom.editorFileSelect?.value || "",
+    {
+        silent = false,
+        selectedItemId = state.editorSelectedItemId,
+    } = {},
+) {
+    if (!filePath) {
+        if (!silent) {
+            addLog("편집할 파일을 먼저 선택하세요.", "warning");
+        }
+        return null;
+    }
+
+    dom.loadEditorButton.disabled = true;
+    if (dom.editorFileSelect) {
+        dom.editorFileSelect.disabled = true;
+    }
+    try {
+        const payload = {
+            ...buildCurrentAnalysisPayload(),
+            publish_settings: collectPublishSettings(),
+            file_relative_path: filePath,
+        };
+        const response = await apiPost("/load_editable_document", payload);
+        state.editorDocument = response.document || null;
+        state.editorFilePath = response.document?.file_relative_path || filePath;
+        const availableIds = new Set((state.editorDocument?.items || []).map((item) => item.item_id));
+        state.editorSelectedItemId = availableIds.has(selectedItemId)
+            ? selectedItemId
+            : (state.editorDocument?.items?.[0]?.item_id || null);
+        renderDocumentEditor();
+        if (!silent) {
+            addLog(`편집 파일 불러오기 완료: ${state.editorFilePath}`, "success");
+        }
+        return response;
+    } catch (error) {
+        state.editorDocument = null;
+        state.editorSelectedItemId = null;
+        renderDocumentEditor();
+        if (!silent) {
+            addLog(`편집 파일 불러오기 실패: ${error.message}`, "error");
+        }
+        throw error;
+    } finally {
+        dom.loadEditorButton.disabled = false;
+        if (dom.editorFileSelect) {
+            dom.editorFileSelect.disabled = false;
+        }
+    }
+}
+
+
+async function refreshAnalysisAfterManualSave({
+    reloadEditor = false,
+    preferredFilePath = state.editorFilePath,
+    selectedItemId = state.editorSelectedItemId,
+    activateTabName = state.activeTab,
+} = {}) {
+    const analysis = await apiPost("/analyze_sources", buildCurrentAnalysisPayload());
+    populateFromAnalysis(analysis, "수동 편집 반영");
+    if (reloadEditor && preferredFilePath) {
+        try {
+            await loadEditableDocument(preferredFilePath, {
+                silent: true,
+                selectedItemId,
+            });
+        } catch {
+            // The editor falls back to its empty state if the file is unavailable.
+        }
+    }
+    if (activateTabName) {
+        activateTab(activateTabName);
+    }
+    return analysis;
+}
+
+
+async function saveManualEdits(
+    edits,
+    {
+        successMessage = "수동 수정이 저장되었습니다.",
+        reloadEditor = false,
+        preferredFilePath = state.editorFilePath,
+        selectedItemId = state.editorSelectedItemId,
+        activateTabName = state.activeTab,
+    } = {},
+) {
+    if (!Array.isArray(edits) || !edits.length) {
+        addLog("저장할 변경이 없습니다.", "warning");
+        return null;
+    }
+
+    const normalizedEdits = edits
+        .map((entry) => ({
+            file_relative_path: String(entry.file_relative_path || "").trim(),
+            item_id: String(entry.item_id || "").trim(),
+            text: String(entry.text ?? "").trim(),
+        }))
+        .filter((entry) => entry.file_relative_path && entry.item_id && entry.text);
+    if (!normalizedEdits.length) {
+        addLog("비어 있지 않은 번역문만 저장할 수 있습니다.", "warning");
+        return null;
+    }
+
+    dom.saveEditorButton.disabled = true;
+    try {
+        const response = await apiPost("/apply_manual_edits", buildManualEditPayload(normalizedEdits));
+        normalizedEdits.forEach((entry) => {
+            delete state.editorDrafts[entry.item_id];
+        });
+        renderResults(response);
+        addLog(`${successMessage} ${response.applied_item_count || normalizedEdits.length}건`, "success");
+        if (response.publish_bundle?.publish_root) {
+            addLog(`Ren'Py publish bundle 반영: ${response.publish_bundle.publish_root}`, "success");
+        }
+        await refreshAnalysisAfterManualSave({
+            reloadEditor,
+            preferredFilePath,
+            selectedItemId,
+            activateTabName,
+        });
+        return response;
+    } catch (error) {
+        addLog(`수동 수정 저장 실패: ${error.message}`, "error");
+        throw error;
+    } finally {
+        dom.saveEditorButton.disabled = false;
+    }
+}
+
+
 function buildTranslationScopeLabel(payload) {
     const scope = payload.translation_scope || {};
+    const ruleLabel = getTranslationRuleLabel(scope.translation_rule || payload.translation_rule || getTranslationRuleValue());
     if (scope.mode === "selected_speakers") {
-        return `speaker=${scope.selected_speaker_names?.join(", ") || scope.selected_speaker_ids?.join(", ") || "-"}`;
+        return `${ruleLabel} · speaker=${scope.selected_speaker_names?.join(", ") || scope.selected_speaker_ids?.join(", ") || "-"}`;
     }
-    return "all-items";
+    return `${ruleLabel} · all-items`;
 }
 
 
@@ -1448,6 +2182,9 @@ function buildCharacterDetailPanelHtml(selectedCharacter) {
                     <div class="pill-list">
                         <span class="pill">${selectedCharacter.line_count} lines</span>
                         <span class="pill">${selectedCharacter.adult_line_count} adult</span>
+                        <span class="pill subtle">미번역 ${selectedCharacter.untranslated_line_count || 0}</span>
+                        <span class="pill subtle">연결 ${selectedCharacter.game_translated_line_count || 0}</span>
+                        <span class="pill subtle">워크벤치 ${selectedCharacter.workbench_translated_line_count || 0}</span>
                         ${isSystemCharacter(selectedCharacter) ? '<span class="pill subtle">System speaker</span>' : ""}
                         ${selectedCharacter.portrait?.source_type ? `<span class="pill subtle">${escapeHtml(selectedCharacter.portrait.source_type)}</span>` : ""}
                     </div>
@@ -1626,6 +2363,9 @@ function buildCharacterDetailPanelHtmlEnhanced(selectedCharacter) {
                     <div class="pill-list">
                         <span class="pill">${selectedCharacter.line_count} lines</span>
                         <span class="pill">${selectedCharacter.adult_line_count} adult</span>
+                        <span class="pill subtle">미번역 ${selectedCharacter.untranslated_line_count || 0}</span>
+                        <span class="pill subtle">연결 ${selectedCharacter.game_translated_line_count || 0}</span>
+                        <span class="pill subtle">워크벤치 ${selectedCharacter.workbench_translated_line_count || 0}</span>
                         ${isSystemCharacter(selectedCharacter) ? '<span class="pill subtle">System speaker</span>' : ""}
                         ${selectedCharacter.portrait?.source_type ? `<span class="pill subtle">${escapeHtml(selectedCharacter.portrait.source_type)}</span>` : ""}
                     </div>
@@ -1894,7 +2634,7 @@ function renderResults(payload = { results: [] }) {
         info.className = "result-row";
         info.innerHTML = `
             <div><strong>번역 범위</strong></div>
-            <div class="helper-text">${escapeHtml(scope.mode === "selected_speakers" ? "선택 캐릭터 재번역" : "전체 항목 번역")}</div>
+            <div class="helper-text">${escapeHtml(scope.mode === "selected_speakers" ? "선택 캐릭터 범위" : "전체 항목 범위")} · ${escapeHtml(getTranslationRuleLabel(scope.translation_rule || "missing_only"))}</div>
             <div class="helper-text">${escapeHtml((scope.selected_speaker_names || scope.selected_speaker_ids || []).join(", ") || "전체 화자")}</div>
         `;
         dom.resultsPanel.appendChild(info);
@@ -2280,6 +3020,7 @@ function buildTranslationPayload(options = {}) {
         openai_oauth_command: normalizeOpenAIOAuthCommand(dom.openaiOAuthCommandInput.value),
         model_name: dom.modelInput.value.trim(),
         target_language: dom.targetLanguageInput.value.trim() || "ko",
+        translation_rule: options.translationRule || getTranslationRuleValue(),
         batch_size: Number(dom.batchSizeInput.value || getDefaultBatchSizeValue()),
         api_delay: Number(dom.apiDelayInput.value || getDefaultApiDelayValue()),
         include_adult_content: dom.includeAdultCheckbox.checked,
@@ -2305,12 +3046,14 @@ function buildTranslationPayload(options = {}) {
             mode: "selected_speakers",
             selected_speaker_ids: selectedSpeakerIds,
             selected_speaker_names: selectedSpeakerNames,
+            translation_rule: payload.translation_rule,
         };
     } else {
         payload.translation_scope = {
             mode: "all_items",
             selected_speaker_ids: [],
             selected_speaker_names: [],
+            translation_rule: payload.translation_rule,
         };
     }
 
@@ -2392,6 +3135,7 @@ async function retranslateSelectedCharacter(speakerId = state.selectedCharacterI
     addLog(`캐릭터 재번역 요청: ${displayName}`, "info");
     await translateSelection({
         selectedSpeakerIds: [speakerId],
+        translationRule: "retranslate_existing",
         forceRetranslate: true,
     });
 }
@@ -2405,6 +3149,7 @@ function buildProfilePayload() {
         openai_oauth_command: normalizeOpenAIOAuthCommand(dom.openaiOAuthCommandInput.value),
         model_name: dom.modelInput.value.trim(),
         target_language: dom.targetLanguageInput.value.trim(),
+        translation_rule: getTranslationRuleValue(),
         batch_size: Number(dom.batchSizeInput.value || getDefaultBatchSizeValue()),
         api_delay: Number(dom.apiDelayInput.value || getDefaultApiDelayValue()),
         include_adult_content: dom.includeAdultCheckbox.checked,
@@ -2443,8 +3188,20 @@ function applyProfile(profile) {
     dom.openaiAuthModeSelect.value = profile.openai_auth_mode || dom.openaiAuthModeSelect.value || "api_key";
     dom.openaiOAuthCommandInput.value = normalizeOpenAIOAuthCommand(profile.openai_oauth_command);
     updateModelSuggestions();
+    dom.apiKeyInput.value = supportsApiKey(
+        profile.provider || dom.providerSelect.value,
+        profile.openai_auth_mode || getOpenAIAuthMode(),
+    ) ? (profile.api_key || "") : "";
+    if (!dom.apiKeyInput.value) {
+        syncStoredApiKeyForCurrentScope();
+    } else {
+        handleApiKeyMutation({ rerender: false });
+    }
     dom.modelInput.value = profile.model_name || dom.modelInput.value;
     dom.targetLanguageInput.value = profile.target_language || "ko";
+    if (dom.translationRuleSelect) {
+        dom.translationRuleSelect.value = profile.translation_rule || "missing_only";
+    }
     dom.batchSizeInput.value = profile.batch_size || getDefaultBatchSizeValue(profile.provider || dom.providerSelect.value, profile.openai_auth_mode || getOpenAIAuthMode());
     dom.apiDelayInput.value = profile.api_delay ?? getDefaultApiDelayValue(profile.provider || dom.providerSelect.value, profile.openai_auth_mode || getOpenAIAuthMode());
     dom.includeAdultCheckbox.checked = Boolean(profile.include_adult_content);
@@ -2457,6 +3214,7 @@ function applyProfile(profile) {
         ? new Set(profile.selected_files)
         : new Set();
     syncTranslationPresetSelection();
+    renderTranslationHint();
     if (state.analysis) {
         renderFileTable();
         renderCharacterGrid();
@@ -2596,7 +3354,7 @@ async function previewCharacterTone(speakerId = state.selectedCharacterId) {
     renderSelectedCharacterDetail();
     try {
         const response = await apiPost("/preview_character_tone", payload);
-        state.tonePreviewByCharacter[speakerId] = response;
+        state.tonePreviewByCharacter[speakerId] = { ...response, cacheable: true, cacheHit: false };
         addLog(`샘플 미리 번역 완료: ${character.display_name || character.speaker_id} · ${response.tone_preset_name || "직접 입력"}`, "success");
     } catch (error) {
         addLog(`샘플 미리 번역 실패: ${error.message}`, "error");
@@ -2628,7 +3386,10 @@ async function previewCharacterToneComparison(speakerId = state.selectedCharacte
     const previewVariants = buildCharacterPreviewVariants(character);
     const cacheKey = buildCharacterPreviewCacheKey(character, previewVariants, sampleLines);
     const cachedPreview = state.tonePreviewByCharacter[speakerId];
-    if (cachedPreview?.cacheKey === cacheKey) {
+    const canReuseCachedPreview = cachedPreview?.cacheKey === cacheKey
+        && cachedPreview?.cacheable !== false
+        && !cachedPreview?.variants?.some((variant) => variant.error);
+    if (canReuseCachedPreview) {
         state.tonePreviewByCharacter[speakerId] = {
             ...cachedPreview,
             cacheHit: true,
@@ -2694,16 +3455,17 @@ async function previewCharacterToneComparison(speakerId = state.selectedCharacte
                 error: result.reason?.message || "미리 번역 실패",
             };
         });
+        const failedCount = normalizedVariants.filter((variant) => variant.error).length;
 
         state.tonePreviewByCharacter[speakerId] = {
             cacheKey,
+            cacheable: failedCount === 0,
             cacheHit: false,
             provider,
             model_name: commonPayload.model_name,
             sample_lines: sampleLines,
             variants: normalizedVariants,
         };
-        const failedCount = normalizedVariants.filter((variant) => variant.error).length;
         addLog(
             `샘플 미리 번역 완료: ${character.display_name || character.speaker_id} · ${normalizedVariants.length - failedCount}/${normalizedVariants.length}안 성공`,
             failedCount ? "warning" : "success",
@@ -2823,8 +3585,329 @@ async function prefillStartupPath() {
 }
 
 
+function renderTranslationHint() {
+    const rule = getTranslationRuleValue();
+    const ruleLabel = getTranslationRuleLabel(rule);
+    if (dom.translateButton) {
+        if (rule === "retranslate_existing") {
+            dom.translateButton.textContent = "선택 파일 재번역";
+        } else if (rule === "force_all") {
+            dom.translateButton.textContent = "선택 파일 새로 통번역";
+        } else {
+            dom.translateButton.textContent = "선택 파일 미번역 번역";
+        }
+    }
+
+    let ruleHint = "현재 범위에서 미번역 줄만 새로 번역합니다. 이미 게임에 연결된 번역과 워크벤치 출력은 유지합니다.";
+    if (rule === "retranslate_existing") {
+        ruleHint = "현재 범위에서 이미 번역된 줄만 다시 번역합니다. 캐릭터 재번역도 이 규칙으로 동작합니다.";
+    } else if (rule === "force_all") {
+        ruleHint = "현재 범위의 줄을 전부 새 번역 대상으로 잡습니다. 기존 번역도 다시 씁니다.";
+    }
+    if (usesOpenAIOAuth()) {
+        dom.translationHint.textContent = `현재 규칙: ${ruleLabel}. ${ruleHint} OpenAI OAuth 모드에서는 배치 상한을 기준으로 더 싼 모델과 청크 크기를 자동 선택하고, 완료된 파일은 즉시 Ren'Py 출력 경로에 반영합니다.`;
+        return;
+    }
+    dom.translationHint.textContent = `현재 규칙: ${ruleLabel}. ${ruleHint} Gemini/API 모드에서는 배치 상한과 글자수 budget을 함께 보고 긴 대사를 더 작은 청크로 자동 분할합니다.`;
+}
+
+
+function updateProviderUI() {
+    const isOpenAI = dom.providerSelect.value === "openai";
+    const useOauth = usesOpenAIOAuth();
+    dom.openaiOAuthCommandInput.value = normalizeOpenAIOAuthCommand(dom.openaiOAuthCommandInput.value);
+    if (!useOauth) {
+        clearOpenAIOAuthPoll();
+    }
+
+    dom.openaiAuthField.classList.toggle("hidden", !isOpenAI);
+    dom.apiKeyField.classList.toggle("hidden", isOpenAI && useOauth);
+    dom.openaiOAuthPanel.classList.toggle("hidden", !isOpenAI || !useOauth);
+    dom.apiKeyInput.disabled = isOpenAI && useOauth;
+    dom.batchSizeInput.disabled = false;
+    dom.apiDelayInput.disabled = useOauth;
+    renderTranslationHint();
+
+    if (useOauth) {
+        dom.openaiOAuthStatus.textContent = dom.openaiOAuthStatus.textContent || "CLI 점검 대기 중입니다.";
+    }
+    renderTranslationPresetSummary();
+}
+
+
+function renderAdultQueue() {
+    const queue = state.analysis?.adult_queue || [];
+    if (!queue.length) {
+        dom.adultQueue.className = "adult-queue empty-state";
+        dom.adultQueue.textContent = "성인 큐가 아직 없습니다.";
+        return;
+    }
+
+    dom.adultQueue.className = "adult-queue";
+    dom.adultQueue.innerHTML = queue.map((item) => {
+        const draftValue = getEditorDraftValue(item);
+        const isDirty = draftValue.trim() !== getEditableDisplayText(item).trim();
+        return `
+            <article class="manual-edit-card${isDirty ? " is-dirty" : ""}">
+                <div class="dialogue-row-header">
+                    <div>
+                        <strong>${escapeHtml(item.speaker_name || item.speaker_id || "Narration")}</strong>
+                        <div class="helper-text">${escapeHtml(item.file_relative_path)}:${escapeHtml(item.line_number)} · ${escapeHtml(getTranslationStatusLabel(item.translation_status, item.translation_source))}</div>
+                    </div>
+                    <div class="pill-list compact">
+                        <span class="pill subtle">${escapeHtml((item.adult_keywords || []).join(", ") || "adult queue")}</span>
+                    </div>
+                </div>
+                <div class="editor-source-box">
+                    <strong>원문</strong>
+                    <p>${escapeHtml(item.source_text)}</p>
+                </div>
+                ${buildTranslationPreviewLines(item)}
+                <label class="field">
+                    <span>직접 번역</span>
+                    <textarea data-role="adult-text" data-item-id="${escapeHtml(item.item_id)}" rows="6" placeholder="이 줄은 직접 번역해 바로 게임 출력에 반영할 수 있습니다.">${escapeHtml(draftValue)}</textarea>
+                </label>
+                <div class="editor-context-grid">
+                    <div class="editor-source-box">
+                        <strong>이전 문맥</strong>
+                        <p>${escapeHtml((item.context_before || []).join("\n") || "없음")}</p>
+                    </div>
+                    <div class="editor-source-box">
+                        <strong>다음 문맥</strong>
+                        <p>${escapeHtml((item.context_after || []).join("\n") || "없음")}</p>
+                    </div>
+                </div>
+                <div class="manual-edit-actions">
+                    <button type="button" class="ghost-button mini-button" data-action="open-adult-in-editor" data-file-path="${escapeHtml(item.file_relative_path)}" data-item-id="${escapeHtml(item.item_id)}">편집 탭에서 열기</button>
+                    <button type="button" class="secondary-button mini-button" data-action="save-adult-item" data-file-path="${escapeHtml(item.file_relative_path)}" data-item-id="${escapeHtml(item.item_id)}">이 줄 저장</button>
+                </div>
+            </article>
+        `;
+    }).join("");
+}
+
+
+function populateFromAnalysis(analysis, label) {
+    captureCurrentCharacterProfiles();
+    state.analysis = analysis;
+    clearTonePreview();
+    const availableFilePaths = (analysis.files || []).map((file) => file.file_relative_path);
+    const preservedSelection = availableFilePaths.filter((filePath) => state.selectedFiles.has(filePath));
+    state.selectedFiles = new Set(preservedSelection.length ? preservedSelection : availableFilePaths);
+    state.characterProfiles = {
+        ...(analysis.default_character_profiles || {}),
+        ...state.characterProfiles,
+    };
+    state.characterFilter = "";
+    const nextCharacters = analysis.characters || [];
+    const firstPlayableCharacter = nextCharacters.find((character) => !isSystemCharacter(character));
+    state.selectedCharacterId = nextCharacters.some((character) => character.speaker_id === state.selectedCharacterId)
+        ? state.selectedCharacterId
+        : (firstPlayableCharacter?.speaker_id || nextCharacters[0]?.speaker_id || null);
+    state.editorDocument = null;
+    state.editorSelectedItemId = null;
+    if (!availableFilePaths.includes(state.editorFilePath)) {
+        state.editorFilePath = "";
+    }
+
+    dom.analysisModeLabel.textContent = `${label} · ${analysis.analysis_mode}`;
+    applyWorldSettings(analysis.default_world_settings || {}, false);
+    applyPublishSettings(analysis.default_publish_settings || {}, false);
+    renderSummary();
+    renderWorldInference();
+    renderPublishBaseline();
+    renderDialoguePreview();
+    renderFileTable();
+    renderCharacterGrid();
+    renderAdultQueue();
+    renderDocumentEditor();
+    renderTranslationHint();
+}
+
+
+function updateEditorDraftState(itemId) {
+    if (!state.editorDocument) {
+        return;
+    }
+    const item = getEditorItems().find((entry) => entry.item_id === itemId);
+    const listButton = Array.from(dom.documentEditor.querySelectorAll("[data-action='select-editor-item']"))
+        .find((entry) => entry.dataset.itemId === itemId);
+    if (listButton && item) {
+        listButton.classList.toggle("is-dirty", isEditorItemDirty(item));
+    }
+    dom.editorSummary.textContent = buildEditorSummaryText(state.editorDocument, getVisibleEditorItems().length);
+}
+
+
+function handleDocumentEditorInput(event) {
+    const textField = event.target.closest("[data-role='editor-text']");
+    if (!textField) {
+        return;
+    }
+    const itemId = textField.dataset.itemId;
+    const item = getEditorItems().find((entry) => entry.item_id === itemId);
+    if (!item) {
+        return;
+    }
+    if (textField.value === (item.editable_text || "")) {
+        delete state.editorDrafts[itemId];
+    } else {
+        state.editorDrafts[itemId] = textField.value;
+    }
+    updateEditorDraftState(itemId);
+}
+
+
+async function handleDocumentEditorClick(event) {
+    const selectButton = event.target.closest("[data-action='select-editor-item']");
+    if (selectButton) {
+        const scrollTop = dom.documentEditor.querySelector(".editor-list")?.scrollTop || 0;
+        state.editorSelectedItemId = selectButton.dataset.itemId || null;
+        renderDocumentEditor();
+        const nextList = dom.documentEditor.querySelector(".editor-list");
+        if (nextList) {
+            nextList.scrollTop = scrollTop;
+        }
+        return;
+    }
+
+    const saveButton = event.target.closest("[data-action='save-editor-item']");
+    if (!saveButton || !state.editorDocument) {
+        return;
+    }
+    const itemId = saveButton.dataset.itemId || "";
+    const item = getEditorItems().find((entry) => entry.item_id === itemId);
+    if (!item) {
+        return;
+    }
+    const text = getEditorDraftValue(item).trim();
+    if (!text) {
+        addLog("비어 있지 않은 번역문만 저장할 수 있습니다.", "warning");
+        return;
+    }
+    await saveManualEdits(
+        [
+            {
+                file_relative_path: item.file_relative_path,
+                item_id: item.item_id,
+                text,
+            },
+        ],
+        {
+            successMessage: "현재 줄 저장 완료:",
+            reloadEditor: true,
+            preferredFilePath: state.editorFilePath,
+            selectedItemId: item.item_id,
+            activateTabName: "editor",
+        },
+    );
+}
+
+
+async function saveLoadedEditorDocument() {
+    if (!state.editorDocument) {
+        addLog("먼저 편집할 파일을 불러오세요.", "warning");
+        return;
+    }
+    const edits = getEditorItems()
+        .filter((item) => isEditorItemDirty(item))
+        .map((item) => ({
+            file_relative_path: item.file_relative_path,
+            item_id: item.item_id,
+            text: getEditorDraftValue(item),
+        }));
+    if (!edits.length) {
+        addLog("저장할 변경이 없습니다.", "warning");
+        return;
+    }
+    await saveManualEdits(edits, {
+        successMessage: `${state.editorFilePath} 저장 완료:`,
+        reloadEditor: true,
+        preferredFilePath: state.editorFilePath,
+        selectedItemId: state.editorSelectedItemId,
+        activateTabName: "editor",
+    });
+}
+
+
+function handleAdultQueueInput(event) {
+    const textField = event.target.closest("[data-role='adult-text']");
+    if (!textField) {
+        return;
+    }
+    const itemId = textField.dataset.itemId || "";
+    const item = (state.analysis?.adult_queue || []).find((entry) => entry.item_id === itemId);
+    if (!item) {
+        return;
+    }
+    if (textField.value === getEditableDisplayText(item)) {
+        delete state.editorDrafts[itemId];
+    } else {
+        state.editorDrafts[itemId] = textField.value;
+    }
+    textField.closest(".manual-edit-card")?.classList.toggle(
+        "is-dirty",
+        textField.value.trim() !== getEditableDisplayText(item).trim(),
+    );
+}
+
+
+async function handleAdultQueueClick(event) {
+    const openButton = event.target.closest("[data-action='open-adult-in-editor']");
+    if (openButton) {
+        const filePath = openButton.dataset.filePath || "";
+        const itemId = openButton.dataset.itemId || "";
+        if (!filePath) {
+            return;
+        }
+        state.editorFilePath = filePath;
+        if (dom.editorFileSelect) {
+            dom.editorFileSelect.value = filePath;
+        }
+        activateTab("editor");
+        await loadEditableDocument(filePath, {
+            selectedItemId: itemId || state.editorSelectedItemId,
+        });
+        return;
+    }
+
+    const saveButton = event.target.closest("[data-action='save-adult-item']");
+    if (!saveButton) {
+        return;
+    }
+    const itemId = saveButton.dataset.itemId || "";
+    const filePath = saveButton.dataset.filePath || "";
+    const item = (state.analysis?.adult_queue || []).find((entry) => entry.item_id === itemId);
+    if (!item || !filePath) {
+        return;
+    }
+    const text = getEditorDraftValue(item).trim();
+    if (!text) {
+        addLog("비어 있지 않은 번역문만 저장할 수 있습니다.", "warning");
+        return;
+    }
+    await saveManualEdits(
+        [
+            {
+                file_relative_path: filePath,
+                item_id: itemId,
+                text,
+            },
+        ],
+        {
+            successMessage: "성인 큐 저장 완료:",
+            reloadEditor: state.editorFilePath === filePath,
+            preferredFilePath: state.editorFilePath || filePath,
+            selectedItemId: state.editorFilePath === filePath ? itemId : state.editorSelectedItemId,
+            activateTabName: "adult",
+        },
+    );
+}
+
+
 function init() {
     applyTranslationPreset(DEFAULT_TRANSLATION_PRESET_ID, { log: false });
+    syncStoredApiKeyForCurrentScope();
     setGlossaryRows([]);
     setStyleOverrideRows([]);
     renderSummary();
@@ -2841,16 +3924,23 @@ function init() {
     dom.translationPresetGrid?.addEventListener("click", handleTranslationPresetClick);
     dom.providerSelect.addEventListener("change", () => {
         updateModelSuggestions();
+        syncStoredApiKeyForCurrentScope();
         syncTranslationPresetSelection();
     });
     dom.openaiAuthModeSelect.addEventListener("change", () => {
         updateModelSuggestions();
+        syncStoredApiKeyForCurrentScope();
         syncTranslationPresetSelection();
     });
+    dom.apiKeyInput.addEventListener("input", () => handleApiKeyMutation({ rerender: true }));
+    dom.saveApiKeyButton?.addEventListener("click", saveCurrentApiKeyToStorage);
+    dom.loadApiKeyButton?.addEventListener("click", () => loadStoredApiKeyForCurrentScope({ rerender: true }));
+    dom.clearApiKeyButton?.addEventListener("click", clearStoredApiKeyForCurrentScope);
     [dom.modelInput, dom.batchSizeInput, dom.apiDelayInput].forEach((element) => {
         element.addEventListener("input", syncTranslationPresetSelection);
         element.addEventListener("change", syncTranslationPresetSelection);
     });
+    dom.translationRuleSelect?.addEventListener("change", renderTranslationHint);
     dom.setupOpenAIOAuthButton.addEventListener("click", setupOpenAIOAuth);
     dom.checkOpenAIOAuthButton.addEventListener("click", checkOpenAIOAuthStatus);
     dom.pickExeButton.addEventListener("click", pickExeAndAnalyze);
@@ -2899,3 +3989,35 @@ function init() {
 
 
 init();
+
+dom.editorFileSelect?.addEventListener("change", () => {
+    state.editorFilePath = dom.editorFileSelect.value || "";
+});
+dom.editorStatusFilter?.addEventListener("change", () => {
+    state.editorStatusFilter = dom.editorStatusFilter.value || "all";
+    renderDocumentEditor();
+});
+dom.editorSearchInput?.addEventListener("input", () => {
+    state.editorSearchQuery = dom.editorSearchInput.value || "";
+    renderDocumentEditor();
+});
+dom.loadEditorButton?.addEventListener("click", async () => {
+    activateTab("editor");
+    try {
+        await loadEditableDocument();
+    } catch {
+        // loadEditableDocument already reports the failure.
+    }
+});
+dom.saveEditorButton?.addEventListener("click", () => {
+    saveLoadedEditorDocument().catch(() => {});
+});
+dom.documentEditor?.addEventListener("input", handleDocumentEditorInput);
+dom.documentEditor?.addEventListener("click", (event) => {
+    handleDocumentEditorClick(event).catch(() => {});
+});
+dom.adultQueue?.addEventListener("input", handleAdultQueueInput);
+dom.adultQueue?.addEventListener("click", (event) => {
+    handleAdultQueueClick(event).catch(() => {});
+});
+renderDocumentEditor();

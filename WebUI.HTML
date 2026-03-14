@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="./webui.css?v=20260314-1930">
+    <link rel="stylesheet" href="./webui.css?v=20260314-2305">
 </head>
 <body>
     <main class="app-shell">
@@ -50,6 +50,12 @@
                 <label class="field" id="apiKeyField">
                     <span>API 키</span>
                     <input type="password" id="apiKeyInput" placeholder="사용할 API 키를 입력하세요">
+                    <div class="field-actions">
+                        <button type="button" class="secondary-button mini-button" id="saveApiKeyButton">키 저장</button>
+                        <button type="button" class="ghost-button mini-button" id="loadApiKeyButton">키 불러오기</button>
+                        <button type="button" class="ghost-button mini-button" id="clearApiKeyButton">저장 키 삭제</button>
+                    </div>
+                    <p class="helper-text" id="apiKeyStorageStatus">현재 범위에 저장된 API 키가 없습니다.</p>
                 </label>
                 <div class="provider-note hidden" id="openaiOAuthPanel">
                     <div class="provider-note-header">
@@ -159,6 +165,18 @@
                 <span class="stat-label">성인 큐</span>
                 <strong id="summaryAdult">0</strong>
             </article>
+            <article class="stat-card">
+                <span class="stat-label">미번역</span>
+                <strong id="summaryUntranslated">0</strong>
+            </article>
+            <article class="stat-card">
+                <span class="stat-label">기존 번역</span>
+                <strong id="summaryGameTranslated">0</strong>
+            </article>
+            <article class="stat-card">
+                <span class="stat-label">워크벤치</span>
+                <strong id="summaryWorkbenchTranslated">0</strong>
+            </article>
         </section>
 
         <nav class="panel tab-nav" id="tabNav">
@@ -168,6 +186,7 @@
             <button type="button" class="tab-button" data-tab="publish">배포/폰트</button>
             <button type="button" class="tab-button" data-tab="characters">캐릭터</button>
             <button type="button" class="tab-button" data-tab="adult">성인 큐</button>
+            <button type="button" class="tab-button" data-tab="editor">편집/검수</button>
             <button type="button" class="tab-button" data-tab="results">결과/로그</button>
         </nav>
 
@@ -366,9 +385,47 @@
                     <h2>성인 대사 분리 영역</h2>
                 </div>
                 <p class="helper-text">
-                    메인 번역에서 제외한 성인 묘사나 별도 재검토가 필요한 항목을 여기서 확인합니다.
+                    메인 번역에서 제외한 성인 묘사나 별도 재검토가 필요한 항목을 여기서 확인하고 직접 번역해 저장합니다.
                 </p>
                 <div id="adultQueue" class="adult-queue empty-state">성인 큐가 아직 없습니다.</div>
+            </section>
+
+            <section class="panel stack tab-panel" data-panel="editor">
+                <div class="section-heading">
+                    <p class="section-kicker">Editor</p>
+                    <h2>원문 / 번역문 편집기</h2>
+                </div>
+                <p class="helper-text">
+                    번역이 연결된 대본이나 워크벤치 출력본을 파일별로 열어 원문과 번역문을 함께 비교하고 수정합니다. 저장하면 현재 게임의 워크벤치 출력과 publish bundle에 즉시 반영됩니다.
+                </p>
+                <div class="editor-toolbar">
+                    <label class="field">
+                        <span>편집할 파일</span>
+                        <select id="editorFileSelect">
+                            <option value="">파일 선택</option>
+                        </select>
+                    </label>
+                    <label class="field compact-field">
+                        <span>상태 필터</span>
+                        <select id="editorStatusFilter">
+                            <option value="all">전체</option>
+                            <option value="untranslated">미번역</option>
+                            <option value="game_translated">기존 연결 번역</option>
+                            <option value="workbench_translated">워크벤치 번역</option>
+                            <option value="adult">성인 큐만</option>
+                        </select>
+                    </label>
+                    <label class="field">
+                        <span>줄 검색</span>
+                        <input type="search" id="editorSearchInput" placeholder="원문, 번역문, 화자, 줄번호 검색">
+                    </label>
+                    <div class="editor-toolbar-actions">
+                        <button type="button" class="secondary-button" id="loadEditorButton">파일 열기</button>
+                        <button type="button" id="saveEditorButton">변경 저장</button>
+                    </div>
+                </div>
+                <p class="helper-text" id="editorSummary">게임 분석 후 파일을 선택하면 원문/번역문 편집기를 사용할 수 있습니다.</p>
+                <div id="documentEditor" class="document-editor empty-state">편집할 파일을 먼저 불러오세요.</div>
             </section>
 
             <section class="panel stack tab-panel" data-panel="results">
@@ -377,6 +434,14 @@
                     <h2>번역 실행 / 결과 / 로그</h2>
                 </div>
                 <div class="inline-action">
+                    <label class="field compact-field">
+                        <span>번역 규칙</span>
+                        <select id="translationRuleSelect">
+                            <option value="missing_only">미번역만 번역</option>
+                            <option value="retranslate_existing">기존 번역만 재번역</option>
+                            <option value="force_all">범위 전체 새로 번역</option>
+                        </select>
+                    </label>
                     <button type="button" id="translateButton">선택 파일 번역</button>
                     <span class="helper-text" id="translationHint">게임 분석 또는 업로드 분석 후 실행할 수 있습니다.</span>
                 </div>
@@ -388,6 +453,6 @@
 
     <datalist id="fontSuggestionList"></datalist>
     <datalist id="styleSuggestionList"></datalist>
-    <script src="./webui.js?v=20260314-1930"></script>
+    <script src="./webui.js?v=20260314-2305"></script>
 </body>
 </html>

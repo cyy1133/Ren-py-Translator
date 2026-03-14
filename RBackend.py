@@ -402,6 +402,13 @@ class TranslationItem:
     adult: bool
     adult_keywords: List[str]
     source_preview: str
+    translation_status: str = "untranslated"
+    translation_source: str = "source_text"
+    connected_translation_text: str = ""
+    connected_translation_source: str = ""
+    workbench_translation_text: str = ""
+    workbench_translation_source: str = ""
+    effective_translation_text: str = ""
     context_before: List[str] = field(default_factory=list)
     context_after: List[str] = field(default_factory=list)
 
@@ -415,6 +422,13 @@ class TranslationItem:
             "line_number": self.line_number,
             "source_text": self.source_text,
             "current_text": self.current_text,
+            "translation_status": self.translation_status,
+            "translation_source": self.translation_source,
+            "connected_translation_text": self.connected_translation_text,
+            "connected_translation_source": self.connected_translation_source,
+            "workbench_translation_text": self.workbench_translation_text,
+            "workbench_translation_source": self.workbench_translation_source,
+            "effective_translation_text": self.effective_translation_text,
             "adult": self.adult,
             "adult_keywords": self.adult_keywords,
             "source_preview": self.source_preview,
@@ -436,9 +450,18 @@ class AnalyzedFile:
     def to_public_dict(self) -> Dict[str, Any]:
         speaker_counts: Dict[str, int] = {}
         adult_count = 0
+        untranslated_count = 0
+        game_translated_count = 0
+        workbench_translated_count = 0
         for item in self.items:
             if item.adult:
                 adult_count += 1
+            if item.translation_status == "workbench_translated":
+                workbench_translated_count += 1
+            elif item.translation_status == "game_translated":
+                game_translated_count += 1
+            else:
+                untranslated_count += 1
             speaker_key = item.speaker_id or NARRATION_PERSONA_KEY
             speaker_counts[speaker_key] = speaker_counts.get(speaker_key, 0) + 1
 
@@ -451,6 +474,9 @@ class AnalyzedFile:
             "file_mode": self.file_mode,
             "item_count": len(self.items),
             "adult_item_count": adult_count,
+            "untranslated_item_count": untranslated_count,
+            "game_translated_item_count": game_translated_count,
+            "workbench_translated_item_count": workbench_translated_count,
             "speaker_counts": speaker_counts,
             "preview_items": preview_items,
         }
@@ -1208,16 +1234,31 @@ def build_default_publish_settings(
     return settings
 
 
+IGNORED_GAME_SCRIPT_PARTS = {"tl", "_translator_output", "_translator_logs"}
+
+
+def is_primary_game_script(path: Path, game_dir: Path) -> bool:
+    try:
+        relative_parts = set(path.relative_to(game_dir).parts)
+    except ValueError:
+        return False
+    return not bool(relative_parts & IGNORED_GAME_SCRIPT_PARTS)
+
+
+def list_game_source_scripts(game_dir: Path) -> List[Path]:
+    return [
+        path
+        for path in sorted(game_dir.rglob("*.rpy"))
+        if is_primary_game_script(path, game_dir)
+    ]
+
+
 def extract_gui_baseline(game_dir: Path) -> Dict[str, Any]:
     raw_assignments: Dict[str, str] = {}
     language_hook_files = set()
     style_candidates = set()
 
-    source_files = [
-        path
-        for path in sorted(game_dir.rglob("*.rpy"))
-        if "tl" not in path.relative_to(game_dir).parts
-    ]
+    source_files = list_game_source_scripts(game_dir)
     all_rpy_files = sorted(game_dir.rglob("*.rpy"))
 
     for file_path in source_files:
@@ -1797,11 +1838,7 @@ def choose_scan_mode(game_dir: Path, target_language: str) -> Dict[str, Any]:
                 "language": target_language,
             }
 
-    source_files = [
-        path
-        for path in sorted(game_dir.rglob("*.rpy"))
-        if "tl" not in path.relative_to(game_dir).parts
-    ]
+    source_files = list_game_source_scripts(game_dir)
     return {
         "mode": "source_files",
         "files": source_files,
@@ -2677,6 +2714,224 @@ def infer_character_defaults(character_stat: Dict[str, Any]) -> Dict[str, str]:
     }
 
 
+def normalize_translation_compare_text(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text or "").strip())
+
+
+def build_translation_match_key(
+    file_relative_path: str,
+    kind: str,
+    speaker_id: Optional[str],
+    source_text: str,
+) -> str:
+    return "|".join(
+        [
+            str(file_relative_path or "").strip().lower(),
+            str(kind or "").strip().lower(),
+            normalize_identifier_token(speaker_id or ""),
+            normalize_translation_compare_text(source_text),
+        ]
+    )
+
+
+def is_meaningfully_translated(source_text: str, translated_text: str) -> bool:
+    translated = normalize_translation_compare_text(translated_text)
+    if not translated:
+        return False
+    return translated != normalize_translation_compare_text(source_text)
+
+
+def load_existing_translation_lookup(
+    analyzed_files: List[AnalyzedFile],
+    character_registry: Dict[str, Dict[str, Any]],
+    analysis_mode: str,
+    overlay_root: Optional[Path],
+    source_label: Optional[str] = None,
+) -> Dict[str, Any]:
+    if overlay_root is None or not overlay_root.is_dir():
+        return {"by_item_id": {}, "by_match_key": {}}
+
+    translated_lookup: Dict[str, Dict[str, str]] = {}
+    match_lookup: Dict[str, List[Dict[str, str]]] = {}
+    for document in analyzed_files:
+        overlay_path = overlay_root / Path(document.output_relative_path)
+        if not overlay_path.is_file():
+            continue
+        raw_content = read_text_file(overlay_path)
+        if analysis_mode == "translation_layer":
+            overlay_document = parse_translation_file_from_content(
+                file_name=document.file_name,
+                relative_path=document.file_relative_path,
+                output_relative_path=document.output_relative_path,
+                raw_content=raw_content,
+                character_registry=character_registry,
+            )
+        else:
+            overlay_document = parse_source_file_from_content(
+                file_name=document.file_name,
+                relative_path=document.file_relative_path,
+                output_relative_path=document.output_relative_path,
+                raw_content=raw_content,
+                character_registry=character_registry,
+            )
+        for item in overlay_document.items:
+            payload = {
+                "text": item.current_text,
+                "source": source_label or overlay_root.name,
+            }
+            translated_lookup[item.item_id] = payload
+            match_key = build_translation_match_key(
+                file_relative_path=item.file_relative_path,
+                kind=item.kind,
+                speaker_id=item.speaker_id,
+                source_text=item.source_text,
+            )
+            match_lookup.setdefault(match_key, []).append(payload)
+    return {"by_item_id": translated_lookup, "by_match_key": match_lookup}
+
+
+def collect_connected_translation_overlays(
+    game_dir_path: Path,
+    target_language: str,
+) -> List[Dict[str, Any]]:
+    tl_root = game_dir_path / "tl"
+    if not tl_root.is_dir():
+        return []
+
+    normalized_target = normalize_language_code(target_language)
+    overlays: List[Dict[str, Any]] = []
+    for child in tl_root.iterdir():
+        if not child.is_dir():
+            continue
+        folder_name = str(child.name or "").strip()
+        if not folder_name or folder_name.lower() == "none":
+            continue
+        normalized_name = normalize_language_code(folder_name)
+        if not normalized_name.startswith(normalized_target):
+            continue
+
+        suffix = normalized_name[len(normalized_target):].lstrip("_")
+        if not suffix:
+            priority = 0
+        elif suffix == "workbench":
+            priority = 1
+        elif suffix.startswith("workbench"):
+            priority = 2
+        elif suffix == "ai":
+            priority = 4
+        else:
+            priority = 3
+        overlays.append(
+            {
+                "label": folder_name,
+                "path": child,
+                "priority": priority,
+            }
+        )
+
+    overlays.sort(key=lambda item: (item["priority"], item["label"].lower()))
+    return overlays
+
+
+def take_overlay_translation_entry(
+    item: TranslationItem,
+    overlay_lookup: Dict[str, Any],
+    allow_direct: bool = True,
+) -> Dict[str, str]:
+    if allow_direct:
+        direct_lookup = overlay_lookup.get("by_item_id") or {}
+        if item.item_id in direct_lookup:
+            return direct_lookup[item.item_id]
+
+    if is_low_signal_sample(item.source_text) or is_markup_only_text(item.source_text):
+        return {}
+
+    match_lookup = overlay_lookup.get("by_match_key") or {}
+    match_key = build_translation_match_key(
+        file_relative_path=item.file_relative_path,
+        kind=item.kind,
+        speaker_id=item.speaker_id,
+        source_text=item.source_text,
+    )
+    candidates = match_lookup.get(match_key) or []
+    if not candidates:
+        return {}
+    payload = candidates.pop(0)
+    if not candidates:
+        match_lookup.pop(match_key, None)
+    return payload
+
+
+def annotate_existing_translation_state(
+    analyzed_files: List[AnalyzedFile],
+    character_registry: Dict[str, Dict[str, Any]],
+    analysis_mode: str,
+    target_language: str,
+    game_dir: Optional[str],
+) -> None:
+    workbench_root: Optional[Path] = None
+    connected_lookup: Dict[str, Any] = {"by_item_id": {}, "by_match_key": {}}
+    if game_dir:
+        game_dir_path = Path(game_dir)
+        for overlay in collect_connected_translation_overlays(game_dir_path, target_language):
+            overlay_lookup = load_existing_translation_lookup(
+                analyzed_files=analyzed_files,
+                character_registry=character_registry,
+                analysis_mode="translation_layer",
+                overlay_root=overlay["path"],
+                source_label=overlay["label"],
+            )
+            for item_id, payload in (overlay_lookup.get("by_item_id") or {}).items():
+                connected_lookup["by_item_id"].setdefault(item_id, payload)
+            for match_key, payloads in (overlay_lookup.get("by_match_key") or {}).items():
+                connected_lookup["by_match_key"].setdefault(match_key, []).extend(payloads)
+        if analysis_mode == "translation_layer":
+            workbench_root = game_dir_path / "tl" / f"{target_language}_ai"
+        elif analysis_mode == "source_files":
+            workbench_root = game_dir_path / "_translator_output" / f"{target_language}_source"
+
+    workbench_lookup = load_existing_translation_lookup(
+        analyzed_files=analyzed_files,
+        character_registry=character_registry,
+        analysis_mode=analysis_mode,
+        overlay_root=workbench_root,
+    )
+
+    for document in analyzed_files:
+        for item in document.items:
+            connected_text = ""
+            connected_source = ""
+            if analysis_mode == "translation_layer" and is_meaningfully_translated(item.source_text, item.current_text):
+                connected_text = item.current_text
+                connected_source = target_language
+            else:
+                connected_entry = take_overlay_translation_entry(item, connected_lookup, allow_direct=analysis_mode == "translation_layer")
+                if is_meaningfully_translated(item.source_text, connected_entry.get("text", "")):
+                    connected_text = connected_entry.get("text", "")
+                    connected_source = connected_entry.get("source", "")
+
+            workbench_entry = take_overlay_translation_entry(item, workbench_lookup, allow_direct=True)
+            workbench_text = workbench_entry.get("text", "")
+            workbench_source = workbench_entry.get("source", "")
+            item.connected_translation_text = connected_text
+            item.connected_translation_source = connected_source
+            item.workbench_translation_text = workbench_text
+            item.workbench_translation_source = workbench_source
+
+            if is_meaningfully_translated(item.source_text, workbench_text):
+                item.translation_status = "workbench_translated"
+                item.translation_source = f"workbench_output:{workbench_source or 'staging'}"
+                item.effective_translation_text = workbench_text
+            elif is_meaningfully_translated(item.source_text, connected_text):
+                item.translation_status = "game_translated"
+                item.translation_source = f"game_translation:{connected_source or target_language}"
+                item.effective_translation_text = connected_text
+            else:
+                item.translation_status = "untranslated"
+                item.translation_source = "source_text"
+                item.effective_translation_text = ""
+
+
 def build_analysis_response(
     analyzed_files: List[AnalyzedFile],
     character_registry: Dict[str, Dict[str, Any]],
@@ -2686,6 +2941,13 @@ def build_analysis_response(
     game_dir: Optional[str] = None,
     gui_baseline: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    annotate_existing_translation_state(
+        analyzed_files=analyzed_files,
+        character_registry=character_registry,
+        analysis_mode=analysis_mode,
+        target_language=target_language,
+        game_dir=game_dir,
+    )
     character_stats: Dict[str, Dict[str, Any]] = {
         key: {
             "speaker_id": value["speaker_id"],
@@ -2694,6 +2956,9 @@ def build_analysis_response(
             "portrait": value.get("portrait"),
             "line_count": 0,
             "adult_line_count": 0,
+            "untranslated_line_count": 0,
+            "game_translated_line_count": 0,
+            "workbench_translated_line_count": 0,
             "sample_lines": [],
         }
         for key, value in character_registry.items()
@@ -2701,16 +2966,31 @@ def build_analysis_response(
     adult_queue: List[Dict[str, Any]] = []
     term_counts: Dict[str, int] = {}
     dialogue_preview: List[Dict[str, Any]] = []
+    dialogue_preview_limits = {
+        "untranslated": 32,
+        "game_translated": 24,
+        "workbench_translated": 24,
+    }
+    dialogue_preview_counts = {key: 0 for key in dialogue_preview_limits}
 
     total_items = 0
     dialogue_count = 0
     narration_count = 0
     string_count = 0
     adult_count = 0
+    untranslated_count = 0
+    game_translated_count = 0
+    workbench_translated_count = 0
 
     for analyzed_file in analyzed_files:
         for item in analyzed_file.items:
             total_items += 1
+            if item.translation_status == "workbench_translated":
+                workbench_translated_count += 1
+            elif item.translation_status == "game_translated":
+                game_translated_count += 1
+            else:
+                untranslated_count += 1
             if item.kind == "dialogue":
                 dialogue_count += 1
             elif item.kind == "narration":
@@ -2727,14 +3007,29 @@ def build_analysis_response(
                     "portrait": character_registry.get(stats_key, {}).get("portrait"),
                     "line_count": 0,
                     "adult_line_count": 0,
+                    "untranslated_line_count": 0,
+                    "game_translated_line_count": 0,
+                    "workbench_translated_line_count": 0,
                     "sample_lines": [],
                 }
             character_stats[stats_key]["line_count"] += 1
+            if item.translation_status == "workbench_translated":
+                character_stats[stats_key]["workbench_translated_line_count"] += 1
+            elif item.translation_status == "game_translated":
+                character_stats[stats_key]["game_translated_line_count"] += 1
+            else:
+                character_stats[stats_key]["untranslated_line_count"] += 1
             if not is_low_signal_sample(item.source_preview) and len(character_stats[stats_key]["sample_lines"]) < 3:
                 character_stats[stats_key]["sample_lines"].append(item.source_preview)
-            if item.kind in {"dialogue", "narration"} and len(dialogue_preview) < 80:
+            preview_limit = dialogue_preview_limits.get(item.translation_status, 16)
+            if (
+                item.kind in {"dialogue", "narration"}
+                and len(dialogue_preview) < 80
+                and dialogue_preview_counts.get(item.translation_status, 0) < preview_limit
+            ):
                 dialogue_preview.append(
                     {
+                        "item_id": item.item_id,
                         "file_relative_path": item.file_relative_path,
                         "speaker_id": item.speaker_id,
                         "speaker_name": item.speaker_name,
@@ -2742,8 +3037,16 @@ def build_analysis_response(
                         "line_number": item.line_number,
                         "source_text": item.source_text,
                         "current_text": item.current_text,
+                        "translation_status": item.translation_status,
+                        "translation_source": item.translation_source,
+                        "connected_translation_text": item.connected_translation_text,
+                        "connected_translation_source": item.connected_translation_source,
+                        "workbench_translation_text": item.workbench_translation_text,
+                        "workbench_translation_source": item.workbench_translation_source,
+                        "effective_translation_text": item.effective_translation_text,
                     }
                 )
+                dialogue_preview_counts[item.translation_status] = dialogue_preview_counts.get(item.translation_status, 0) + 1
 
             if item.adult:
                 adult_count += 1
@@ -2751,11 +3054,23 @@ def build_analysis_response(
                 if len(adult_queue) < 60:
                     adult_queue.append(
                         {
+                            "item_id": item.item_id,
                             "file_relative_path": item.file_relative_path,
                             "speaker_id": item.speaker_id,
                             "speaker_name": item.speaker_name,
+                            "kind": item.kind,
                             "line_number": item.line_number,
                             "source_text": item.source_text,
+                            "current_text": item.current_text,
+                            "translation_status": item.translation_status,
+                            "translation_source": item.translation_source,
+                            "connected_translation_text": item.connected_translation_text,
+                            "connected_translation_source": item.connected_translation_source,
+                            "workbench_translation_text": item.workbench_translation_text,
+                            "workbench_translation_source": item.workbench_translation_source,
+                            "effective_translation_text": item.effective_translation_text,
+                            "context_before": item.context_before,
+                            "context_after": item.context_after,
                             "adult_keywords": item.adult_keywords,
                         }
                     )
@@ -2811,6 +3126,9 @@ def build_analysis_response(
             "narration_count": narration_count,
             "string_count": string_count,
             "adult_item_count": adult_count,
+            "untranslated_item_count": untranslated_count,
+            "game_translated_item_count": game_translated_count,
+            "workbench_translated_item_count": workbench_translated_count,
         },
         "glossary_suggestions": glossary_suggestions,
         "default_character_profiles": default_character_profiles,
@@ -2826,7 +3144,7 @@ def analyze_game_path(game_exe_path: str, target_language: str) -> Dict[str, Any
         raise FileNotFoundError("'game' 폴더를 찾지 못했습니다.")
 
     game_dir = Path(game_dir_str)
-    source_files = [path for path in sorted(game_dir.rglob("*.rpy")) if "tl" not in path.relative_to(game_dir).parts]
+    source_files = list_game_source_scripts(game_dir)
     character_registry = collect_character_definitions(source_files)
     collect_character_portraits(game_dir, source_files, character_registry)
     gui_baseline = extract_gui_baseline(game_dir)
@@ -2929,10 +3247,56 @@ def filter_documents_by_speaker_ids(
     return filtered_documents
 
 
+def normalize_translation_rule(payload: Dict[str, Any]) -> str:
+    rule = str(payload.get("translation_rule") or "missing_only").strip().lower()
+    if rule not in {"missing_only", "retranslate_existing", "force_all"}:
+        return "missing_only"
+    return rule
+
+
+def should_include_item_for_translation_rule(item: TranslationItem, translation_rule: str) -> bool:
+    if translation_rule == "force_all":
+        return True
+    if translation_rule == "retranslate_existing":
+        return item.translation_status in {"game_translated", "workbench_translated"}
+    return item.translation_status == "untranslated"
+
+
+def filter_documents_by_translation_rule(
+    documents: List[AnalyzedFile],
+    translation_rule: str,
+) -> List[AnalyzedFile]:
+    if translation_rule == "force_all":
+        return documents
+
+    filtered_documents: List[AnalyzedFile] = []
+    for document in documents:
+        filtered_items = [
+            item
+            for item in document.items
+            if should_include_item_for_translation_rule(item, translation_rule)
+        ]
+        if not filtered_items:
+            continue
+        filtered_documents.append(
+            AnalyzedFile(
+                absolute_path=document.absolute_path,
+                file_relative_path=document.file_relative_path,
+                output_relative_path=document.output_relative_path,
+                file_name=document.file_name,
+                file_mode=document.file_mode,
+                raw_content=document.raw_content,
+                items=filtered_items,
+            )
+        )
+    return filtered_documents
+
+
 def get_documents_for_translation(payload: Dict[str, Any]) -> Dict[str, Any]:
     target_language = payload.get("target_language") or DEFAULT_TARGET_LANGUAGE
     selected_files = set(payload.get("selected_files") or [])
     selected_speaker_ids = normalize_selected_speaker_ids(payload)
+    translation_rule = normalize_translation_rule(payload)
     incoming_scope = payload.get("translation_scope") or {}
     selected_speaker_names = [
         str(value or "").strip()
@@ -2945,7 +3309,7 @@ def get_documents_for_translation(payload: Dict[str, Any]) -> Dict[str, Any]:
         if not game_dir_str:
             raise FileNotFoundError("'game' 폴더를 찾지 못했습니다.")
         game_dir = Path(game_dir_str)
-        source_files = [path for path in sorted(game_dir.rglob("*.rpy")) if "tl" not in path.relative_to(game_dir).parts]
+        source_files = list_game_source_scripts(game_dir)
         character_registry = collect_character_definitions(source_files)
         collect_character_portraits(game_dir, source_files, character_registry)
         scan_decision = choose_scan_mode(game_dir, target_language)
@@ -2968,7 +3332,15 @@ def get_documents_for_translation(payload: Dict[str, Any]) -> Dict[str, Any]:
                 if analyzed_file.items:
                     analyzed_files.append(analyzed_file)
 
+        annotate_existing_translation_state(
+            analyzed_files=analyzed_files,
+            character_registry=character_registry,
+            analysis_mode=scan_decision["mode"],
+            target_language=target_language,
+            game_dir=game_dir_str,
+        )
         filtered_documents = filter_documents_by_speaker_ids(analyzed_files, selected_speaker_ids)
+        filtered_documents = filter_documents_by_translation_rule(filtered_documents, translation_rule)
 
         return {
             "documents": filtered_documents,
@@ -2980,7 +3352,8 @@ def get_documents_for_translation(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "mode": "selected_speakers" if selected_speaker_ids else "all_items",
                 "selected_speaker_ids": sorted(selected_speaker_ids),
                 "selected_speaker_names": selected_speaker_names,
-                "force_retranslate": bool(payload.get("force_retranslate")) and bool(selected_speaker_ids),
+                "translation_rule": translation_rule,
+                "force_retranslate": bool(payload.get("force_retranslate")) or translation_rule != "missing_only",
             },
         }
 
@@ -3015,7 +3388,15 @@ def get_documents_for_translation(payload: Dict[str, Any]) -> Dict[str, Any]:
         if analyzed_file.items:
             analyzed_files.append(analyzed_file)
 
+    annotate_existing_translation_state(
+        analyzed_files=analyzed_files,
+        character_registry=character_registry,
+        analysis_mode="uploaded_files",
+        target_language=target_language,
+        game_dir=None,
+    )
     filtered_documents = filter_documents_by_speaker_ids(analyzed_files, selected_speaker_ids)
+    filtered_documents = filter_documents_by_translation_rule(filtered_documents, translation_rule)
 
     return {
         "documents": filtered_documents,
@@ -3027,7 +3408,8 @@ def get_documents_for_translation(payload: Dict[str, Any]) -> Dict[str, Any]:
             "mode": "selected_speakers" if selected_speaker_ids else "all_items",
             "selected_speaker_ids": sorted(selected_speaker_ids),
             "selected_speaker_names": selected_speaker_names,
-            "force_retranslate": bool(payload.get("force_retranslate")) and bool(selected_speaker_ids),
+            "translation_rule": translation_rule,
+            "force_retranslate": bool(payload.get("force_retranslate")) or translation_rule != "missing_only",
         },
     }
 
@@ -5050,6 +5432,63 @@ def write_results_to_disk(
     }
 
 
+def build_effective_translation_lookup(document: AnalyzedFile) -> Dict[str, str]:
+    effective_lookup: Dict[str, str] = {}
+    for item in document.items:
+        if is_meaningfully_translated(item.source_text, item.workbench_translation_text):
+            effective_lookup[item.item_id] = item.workbench_translation_text
+        elif is_meaningfully_translated(item.source_text, item.connected_translation_text):
+            effective_lookup[item.item_id] = item.connected_translation_text
+        elif is_meaningfully_translated(item.source_text, item.current_text):
+            effective_lookup[item.item_id] = item.current_text
+    return effective_lookup
+
+
+def build_editable_translation_text(item: TranslationItem) -> Tuple[str, str]:
+    if is_meaningfully_translated(item.source_text, item.workbench_translation_text):
+        return item.workbench_translation_text, item.workbench_translation_source or "workbench_output"
+    if is_meaningfully_translated(item.source_text, item.connected_translation_text):
+        return item.connected_translation_text, item.connected_translation_source or "game_translation"
+    if is_meaningfully_translated(item.source_text, item.current_text):
+        return item.current_text, "current_file"
+    return "", ""
+
+
+def build_document_editor_payload(
+    document: AnalyzedFile,
+    output_context: Optional[TranslationOutputContext] = None,
+) -> Dict[str, Any]:
+    output_relative_path = ""
+    publish_relative_path = ""
+    if output_context is not None:
+        output_relative_path = str((output_context.output_root / Path(document.output_relative_path)).relative_to(output_context.game_dir_path)).replace("\\", "/")
+        if output_context.publish_root is not None:
+            publish_relative_path = str((output_context.publish_root / Path(document.output_relative_path)).relative_to(output_context.game_dir_path)).replace("\\", "/")
+
+    items_payload: List[Dict[str, Any]] = []
+    for item in document.items:
+        editable_text, editable_source = build_editable_translation_text(item)
+        item_payload = item.to_public_dict()
+        item_payload.update(
+            {
+                "editable_text": editable_text,
+                "editable_source": editable_source,
+            }
+        )
+        items_payload.append(item_payload)
+
+    return {
+        "file_name": document.file_name,
+        "file_relative_path": document.file_relative_path,
+        "file_mode": document.file_mode,
+        "output_relative_path": output_relative_path,
+        "publish_relative_path": publish_relative_path,
+        "item_count": len(document.items),
+        "adult_item_count": sum(1 for item in document.items if item.adult),
+        "items": items_payload,
+    }
+
+
 def build_generate_files_response(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     documents_info = get_documents_for_translation(payload)
     generated_files = []
@@ -5291,6 +5730,151 @@ def preview_character_tone() -> Any:
     )
 
 
+@app.route("/load_editable_document", methods=["POST"])
+def load_editable_document() -> Any:
+    data = request.get_json(force=True) or {}
+    file_relative_path = str(data.get("file_relative_path") or "").strip()
+    if not file_relative_path:
+        return jsonify({"error": "불러올 파일 경로가 비어 있습니다."}), 400
+
+    payload = dict(data)
+    payload["selected_files"] = [file_relative_path]
+    payload["translation_rule"] = "force_all"
+
+    try:
+        translation_inputs = get_documents_for_translation(payload)
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": str(exc)}), 400
+
+    documents = translation_inputs.get("documents") or []
+    if not documents:
+        return jsonify({"error": "편집할 파일을 찾지 못했습니다."}), 404
+
+    document = documents[0]
+    output_context = None
+    if translation_inputs.get("game_dir"):
+        output_context = prepare_translation_output_context(
+            game_dir=translation_inputs["game_dir"],
+            analysis_mode=translation_inputs["analysis_mode"],
+            target_language=translation_inputs["target_language"],
+            publish_settings=data.get("publish_settings"),
+        )
+
+    return jsonify(
+        {
+            "analysis_mode": translation_inputs["analysis_mode"],
+            "target_language": translation_inputs["target_language"],
+            "document": build_document_editor_payload(document, output_context),
+        }
+    )
+
+
+@app.route("/apply_manual_edits", methods=["POST"])
+def apply_manual_edits() -> Any:
+    data = request.get_json(force=True) or {}
+    manual_edits = data.get("edits") or []
+    if not isinstance(manual_edits, list) or not manual_edits:
+        return jsonify({"error": "저장할 수동 수정 항목이 없습니다."}), 400
+
+    selected_files = sorted(
+        {
+            str(entry.get("file_relative_path") or "").strip()
+            for entry in manual_edits
+            if str(entry.get("file_relative_path") or "").strip()
+        }
+    )
+    if not selected_files:
+        return jsonify({"error": "수동 수정 대상 파일을 식별하지 못했습니다."}), 400
+
+    payload = dict(data)
+    payload["selected_files"] = selected_files
+    payload["translation_rule"] = "force_all"
+
+    try:
+        translation_inputs = get_documents_for_translation(payload)
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": str(exc)}), 400
+
+    if not translation_inputs.get("game_dir"):
+        return jsonify({"error": "수동 편집 저장은 게임 경로 분석 모드에서만 지원합니다."}), 400
+
+    output_context = prepare_translation_output_context(
+        game_dir=translation_inputs["game_dir"],
+        analysis_mode=translation_inputs["analysis_mode"],
+        target_language=translation_inputs["target_language"],
+        publish_settings=data.get("publish_settings"),
+    )
+    edit_map: Dict[str, Dict[str, str]] = {}
+    for entry in manual_edits:
+        file_relative_path = str(entry.get("file_relative_path") or "").strip()
+        item_id = str(entry.get("item_id") or "").strip()
+        translated_text = str(entry.get("text") or "").strip()
+        if not file_relative_path or not item_id or not translated_text:
+            continue
+        edit_map.setdefault(file_relative_path, {})[item_id] = translated_text
+
+    if not edit_map:
+        return jsonify({"error": "비어 있지 않은 번역문이 필요합니다."}), 400
+
+    results: List[Dict[str, Any]] = []
+    saved_items: List[Dict[str, Any]] = []
+    selected_documents = [
+        document
+        for document in (translation_inputs.get("documents") or [])
+        if document.file_relative_path in edit_map
+    ]
+    if not selected_documents:
+        return jsonify({"error": "수동 수정 대상 문서를 찾지 못했습니다."}), 404
+
+    for document in selected_documents:
+        document_edits = edit_map.get(document.file_relative_path) or {}
+        translated_lookup = build_effective_translation_lookup(document)
+        applied_count = 0
+        for item in document.items:
+            next_text = document_edits.get(item.item_id)
+            if not next_text:
+                continue
+            translated_lookup[item.item_id] = next_text
+            saved_items.append(
+                {
+                    "item_id": item.item_id,
+                    "file_relative_path": item.file_relative_path,
+                    "speaker_id": item.speaker_id,
+                    "speaker_name": item.speaker_name,
+                    "line_number": item.line_number,
+                    "text": next_text,
+                    "previous_status": item.translation_status,
+                    "new_status": "workbench_translated",
+                }
+            )
+            applied_count += 1
+
+        if applied_count == 0:
+            continue
+        results.append(write_document_result_to_disk(document, translated_lookup, output_context))
+
+    if not results:
+        return jsonify({"error": "적용할 수동 수정 항목이 없습니다."}), 400
+
+    sync_payload = sync_translation_support_files(
+        documents=selected_documents,
+        skipped_adult_items=[],
+        failed_items=[],
+        output_context=output_context,
+    )
+    return jsonify(
+        {
+            "analysis_mode": translation_inputs["analysis_mode"],
+            "target_language": translation_inputs["target_language"],
+            "applied_item_count": len(saved_items),
+            "saved_items": saved_items,
+            "results": results,
+            "adult_review_path": sync_payload["adult_review_path"],
+            "publish_bundle": sync_payload["publish_bundle"],
+        }
+    )
+
+
 @app.route("/translate", methods=["POST"])
 def handle_translation() -> Any:
     log_message("'/translate' 요청 수신")
@@ -5327,7 +5911,14 @@ def handle_translation() -> Any:
         translation_inputs = get_documents_for_translation(data)
         documents = translation_inputs["documents"]
         if not documents:
-            return jsonify({"error": "번역 가능한 항목을 찾지 못했습니다."}), 400
+            translation_rule = (translation_inputs.get("translation_scope") or {}).get("translation_rule") or "missing_only"
+            if translation_rule == "retranslate_existing":
+                message = "현재 범위에는 재번역할 기존 번역 항목이 없습니다."
+            elif translation_rule == "missing_only":
+                message = "현재 범위에는 미번역 항목이 없습니다."
+            else:
+                message = "번역 가능한 항목을 찾지 못했습니다."
+            return jsonify({"error": message, "translation_scope": translation_inputs.get("translation_scope") or {}}), 400
 
         document_write_callback = None
         if translation_inputs["game_dir"]:
