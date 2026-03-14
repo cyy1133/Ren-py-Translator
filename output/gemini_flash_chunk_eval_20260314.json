@@ -1,0 +1,105 @@
+{
+  "results": [
+    {
+      "chunk_size": 8,
+      "sample": "ui_common",
+      "requested_items": 8,
+      "translated_items": 8,
+      "ok": true,
+      "elapsed_sec": 9.17,
+      "error": ""
+    },
+    {
+      "chunk_size": 8,
+      "sample": "atmosphere_alana",
+      "requested_items": 8,
+      "translated_items": 8,
+      "ok": true,
+      "elapsed_sec": 11.307,
+      "error": ""
+    },
+    {
+      "chunk_size": 8,
+      "sample": "story_grace",
+      "requested_items": 8,
+      "translated_items": 8,
+      "ok": true,
+      "elapsed_sec": 14.079,
+      "error": ""
+    },
+    {
+      "chunk_size": 12,
+      "sample": "ui_common",
+      "requested_items": 12,
+      "translated_items": 12,
+      "ok": true,
+      "elapsed_sec": 11.573,
+      "error": ""
+    },
+    {
+      "chunk_size": 12,
+      "sample": "atmosphere_alana",
+      "requested_items": 12,
+      "translated_items": 12,
+      "ok": true,
+      "elapsed_sec": 17.428,
+      "error": ""
+    },
+    {
+      "chunk_size": 12,
+      "sample": "story_grace",
+      "requested_items": 12,
+      "translated_items": 12,
+      "ok": true,
+      "elapsed_sec": 14.894,
+      "error": ""
+    },
+    {
+      "chunk_size": 16,
+      "sample": "ui_common",
+      "requested_items": 16,
+      "translated_items": 16,
+      "ok": true,
+      "elapsed_sec": 10.727,
+      "error": ""
+    },
+    {
+      "chunk_size": 16,
+      "sample": "atmosphere_alana",
+      "requested_items": 16,
+      "translated_items": 16,
+      "ok": true,
+      "elapsed_sec": 22.151,
+      "error": ""
+    },
+    {
+      "chunk_size": 16,
+      "sample": "story_grace",
+      "requested_items": 16,
+      "translated_items": 16,
+      "ok": true,
+      "elapsed_sec": 19.156,
+      "error": ""
+    }
+  ],
+  "summary": {
+    "8": {
+      "successes": 3,
+      "avg_sec": 11.519,
+      "avg_per_item_sec": 1.4398,
+      "min_translated": 8
+    },
+    "12": {
+      "successes": 3,
+      "avg_sec": 14.632,
+      "avg_per_item_sec": 1.2193,
+      "min_translated": 12
+    },
+    "16": {
+      "successes": 3,
+      "avg_sec": 17.345,
+      "avg_per_item_sec": 1.084,
+      "min_translated": 16
+    }
+  }
+}

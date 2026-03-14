@@ -1,0 +1,595 @@
+{
+  "generated_at": "2026-03-14T00:03:19",
+  "chunks": {
+    "ui_common": {
+      "items": [
+        {
+          "item_id": "string_502ccb6392",
+          "file_relative_path": "tl/ko/common.rpy",
+          "kind": "string",
+          "speaker_id": "_default_",
+          "speaker_name": "Default",
+          "line_number": 7,
+          "source_text": "Self-voicing disabled.",
+          "current_text": "자체 음성 출력 비활성화됨.",
+          "adult": false,
+          "adult_keywords": [],
+          "source_preview": "Self-voicing disabled.",
+          "context_before": [],
+          "context_after": [
+            "Clipboard voicing enabled.",
+            "Self-voicing enabled."
+          ]
+        },
+        {
+          "item_id": "string_bc29c1341f",
+          "file_relative_path": "tl/ko/common.rpy",
+          "kind": "string",
+          "speaker_id": "_default_",
+          "speaker_name": "Default",
+          "line_number": 11,
+          "source_text": "Clipboard voicing enabled. ",
+          "current_text": "클립보드 음성 출력 활성화됨.",
+          "adult": false,
+          "adult_keywords": [],
+          "source_preview": "Clipboard voicing enabled.",
+          "context_before": [
+            "Self-voicing disabled."
+          ],
+          "context_after": [
+            "Self-voicing enabled.",
+            "bar"
+          ]
+        },
+        {
+          "item_id": "string_204d097087",
+          "file_relative_path": "tl/ko/common.rpy",
+          "kind": "string",
+          "speaker_id": "_default_",
+          "speaker_name": "Default",
+          "line_number": 15,
+          "source_text": "Self-voicing enabled. ",
+          "current_text": "자체 음성 출력 활성화됨.",
+          "adult": false,
+          "adult_keywords": [],
+          "source_preview": "Self-voicing enabled.",
+          "context_before": [
+            "Self-voicing disabled.",
+            "Clipboard voicing enabled."
+          ],
+          "context_after": [
+            "bar",
+            "selected"
+          ]
+        }
+      ],
+      "char_count": 71
+    },
+    "atmosphere_alana": {
+      "items": [
+        {
+          "item_id": "dialogue_44642194b6",
+          "file_relative_path": "tl/ko/screens_bg.rpy",
+          "kind": "dialogue",
+          "speaker_id": "a",
+          "speaker_name": "Alana",
+          "line_number": 6,
+          "source_text": "One more spring. Another passed, another to come.",
+          "current_text": "또 한 번의 봄입니다. 지나간 봄도 있고, 앞으로 올 봄도 있겠지요.",
+          "adult": false,
+          "adult_keywords": [],
+          "source_preview": "One more spring. Another passed, another to come.",
+          "context_before": [],
+          "context_after": [
+            "Wh... what have we here?",
+            "Lush branches. Verdant leaves. The blossoms promised?"
+          ]
+        },
+        {
+          "item_id": "dialogue_fd11d0ce31",
+          "file_relative_path": "tl/ko/screens_bg.rpy",
+          "kind": "dialogue",
+          "speaker_id": "a",
+          "speaker_name": "Alana",
+          "line_number": 12,
+          "source_text": "Wh... what have we here?",
+          "current_text": "어… 어떤 일이 일어난 거지요?",
+          "adult": false,
+          "adult_keywords": [],
+          "source_preview": "Wh... what have we here?",
+          "context_before": [
+            "One more spring. Another passed, another to come."
+          ],
+          "context_after": [
+            "Lush branches. Verdant leaves. The blossoms promised?",
+            "For the first time in forever the impossible looks close enough to believe. I've never seen you so full! And these blooms..."
+          ]
+        },
+        {
+          "item_id": "dialogue_58deffe52f",
+          "file_relative_path": "tl/ko/screens_bg.rpy",
+          "kind": "dialogue",
+          "speaker_id": "a",
+          "speaker_name": "Alana",
+          "line_number": 17,
+          "source_text": "Lush branches. Verdant leaves. The blossoms promised?",
+          "current_text": "무성한 가지들. 푸른 잎들. 약속했던 꽃들은…?",
+          "adult": false,
+          "adult_keywords": [],
+          "source_preview": "Lush branches. Verdant leaves. The blossoms promised?",
+          "context_before": [
+            "One more spring. Another passed, another to come.",
+            "Wh... what have we here?"
+          ],
+          "context_after": [
+            "For the first time in forever the impossible looks close enough to believe. I've never seen you so full! And these blooms...",
+            "C-could it be coming at long last? The reward I've dreamed of for an eternity?"
+          ]
+        },
+        {
+          "item_id": "dialogue_9714c82513",
+          "file_relative_path": "tl/ko/screens_bg.rpy",
+          "kind": "dialogue",
+          "speaker_id": "a",
+          "speaker_name": "Alana",
+          "line_number": 23,
+          "source_text": "For the first time in forever the impossible looks close enough to believe. I've never seen you so full! And these blooms...",
+          "current_text": "영원히 불가능할 것 같았던 일이 처음으로 이룰 수 있을 만큼 가까이 다가온 것 같습니다. 이렇게 풍성한 걸 본 적이 없어요! 그리고 이 꽃들…",
+          "adult": false,
+          "adult_keywords": [],
+          "source_preview": "For the first time in forever the impossible looks close enough to believe. I've never seen you so full! And these blooms...",
+          "context_before": [
+            "Wh... what have we here?",
+            "Lush branches. Verdant leaves. The blossoms promised?"
+          ],
+          "context_after": [
+            "C-could it be coming at long last? The reward I've dreamed of for an eternity?",
+            "My heart... it pounds so heavily! I almost dare not believe that you thrive!"
+          ]
+        }
+      ],
+      "char_count": 250
+    },
+    "story_grace": {
+      "items": [
+        {
+          "item_id": "narration_32e0176d76",
+          "file_relative_path": "tl/ko/script_grace.rpy",
+          "kind": "narration",
+          "speaker_id": null,
+          "speaker_name": "Narration",
+          "line_number": 4,
+          "source_text": "The memory of the previous day's events is so vivid in my mind that sleep is impossible.",
+          "current_text": "어제 일이 너무 생생하게 떠올라 잠이 오지 않는다.",
+          "adult": false,
+          "adult_keywords": [],
+          "source_preview": "The memory of the previous day's events is so vivid in my mind that sleep is impossible.",
+          "context_before": [],
+          "context_after": [
+            "Grace? {i}Grace MacLeod?{/i} That little scamp from so many years back? Now transformed into an alluring... audacious... unapologetically...",
+            "The thoughts roll through my mind like tidal waves. Soft echoes of her voice, shadows of her face, her smile, her body."
+          ]
+        },
+        {
+          "item_id": "narration_7758c68c2f",
+          "file_relative_path": "tl/ko/script_grace.rpy",
+          "kind": "narration",
+          "speaker_id": null,
+          "speaker_name": "Narration",
+          "line_number": 9,
+          "source_text": "Grace? {i}Grace MacLeod?{/i} That little scamp from so many years back? Now transformed into an alluring... audacious... unapologetically flirtatious young woman.",
+          "current_text": "그레이스? {i}그레이스 맥레오드{/i}? 몇 년 전 그 장난꾸러기가 이렇게 매혹적이고…대담하며…뻔뻔하게 추파를 던지는 젊은 여성으로 변하다니.",
+          "adult": false,
+          "adult_keywords": [],
+          "source_preview": "Grace? {i}Grace MacLeod?{/i} That little scamp from so many years back? Now transformed into an alluring... audacious... unapologetically...",
+          "context_before": [
+            "The memory of the previous day's events is so vivid in my mind that sleep is impossible."
+          ],
+          "context_after": [
+            "The thoughts roll through my mind like tidal waves. Soft echoes of her voice, shadows of her face, her smile, her body.",
+            "The waves crash and my heart thumps harder every time I let my memories of her take me there. Each offers some new level of excitement."
+          ]
+        },
+        {
+          "item_id": "narration_064ba2db9e",
+          "file_relative_path": "tl/ko/script_grace.rpy",
+          "kind": "narration",
+          "speaker_id": null,
+          "speaker_name": "Narration",
+          "line_number": 14,
+          "source_text": "The thoughts roll through my mind like tidal waves. Soft echoes of her voice, shadows of her face, her smile, her body.",
+          "current_text": "그녀의 목소리, 얼굴, 미소, 몸매… 파도처럼 밀려오는 생각들.",
+          "adult": false,
+          "adult_keywords": [],
+          "source_preview": "The thoughts roll through my mind like tidal waves. Soft echoes of her voice, shadows of her face, her smile, her body.",
+          "context_before": [
+            "The memory of the previous day's events is so vivid in my mind that sleep is impossible.",
+            "Grace? {i}Grace MacLeod?{/i} That little scamp from so many years back? Now transformed into an alluring... audacious... unapologetically..."
+          ],
+          "context_after": [
+            "The waves crash and my heart thumps harder every time I let my memories of her take me there. Each offers some new level of excitement.",
+            "I'm intrigued. Infatuated? Am I developing feelings for her?"
+          ]
+        },
+        {
+          "item_id": "narration_e99a27372e",
+          "file_relative_path": "tl/ko/script_grace.rpy",
+          "kind": "narration",
+          "speaker_id": null,
+          "speaker_name": "Narration",
+          "line_number": 19,
+          "source_text": "The waves crash and my heart thumps harder every time I let my memories of her take me there. Each offers some new level of excitement.",
+          "current_text": "파도가 몰아치고, 그녀에 대한 기억이 나를 그곳으로 데려갈 때마다 심장이 더욱 빨리 뜁니다.\\n매 순간 새로운 흥분을 선사합니다.",
+          "adult": false,
+          "adult_keywords": [],
+          "source_preview": "The waves crash and my heart thumps harder every time I let my memories of her take me there. Each offers some new level of excitement.",
+          "context_before": [
+            "Grace? {i}Grace MacLeod?{/i} That little scamp from so many years back? Now transformed into an alluring... audacious... unapologetically...",
+            "The thoughts roll through my mind like tidal waves. Soft echoes of her voice, shadows of her face, her smile, her body."
+          ],
+          "context_after": [
+            "I'm intrigued. Infatuated? Am I developing feelings for her?",
+            "No... it couldn't be that. Could it? Not this soon."
+          ]
+        }
+      ],
+      "char_count": 504
+    }
+  },
+  "gemini_models": [
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-2.5-pro"
+  ],
+  "codex_models": [
+    "gpt-5-mini",
+    "gpt-5.1-codex-mini",
+    "gpt-5.1-codex"
+  ],
+  "runs": [
+    {
+      "provider": "gemini",
+      "model": "gemini-2.5-flash-lite",
+      "chunk": "ui_common",
+      "ok": true,
+      "elapsed_sec": 1.58,
+      "translation_count": 3,
+      "translations": [
+        {
+          "id": "string_502ccb6392",
+          "text": "음성 안내 비활성화."
+        },
+        {
+          "id": "string_bc29c1341f",
+          "text": "클립보드 음성 안내 활성화. "
+        },
+        {
+          "id": "string_204d097087",
+          "text": "음성 안내 활성화. "
+        }
+      ]
+    },
+    {
+      "provider": "gemini",
+      "model": "gemini-2.5-flash-lite",
+      "chunk": "atmosphere_alana",
+      "ok": true,
+      "elapsed_sec": 2.1,
+      "translation_count": 4,
+      "translations": [
+        {
+          "id": "dialogue_44642194b6",
+          "text": "또 한 번의 봄이로구나. 지나간 봄도, 앞으로 올 봄도."
+        },
+        {
+          "id": "dialogue_fd11d0ce31",
+          "text": "이... 이게 대체 무엇이냐?"
+        },
+        {
+          "id": "dialogue_58deffe52f",
+          "text": "무성한 가지들. 푸른 잎사귀들. 약속된 꽃들이로구나?"
+        },
+        {
+          "id": "dialogue_9714c82513",
+          "text": "영원토록 불가능해 보였던 일이 믿을 수 있을 만큼 가까이 다가온 기분이야. 이렇게나 충만한 모습은 처음이야! 그리고 이 꽃들..."
+        }
+      ]
+    },
+    {
+      "provider": "gemini",
+      "model": "gemini-2.5-flash-lite",
+      "chunk": "story_grace",
+      "ok": true,
+      "elapsed_sec": 3.25,
+      "translation_count": 4,
+      "translations": [
+        {
+          "id": "narration_32e0176d76",
+          "text": "어젯밤의 일이 생생하게 떠올라 잠을 이룰 수가 없다."
+        },
+        {
+          "id": "narration_7758c68c2f",
+          "text": "그레이스? {i}그레이스 맥클라우드?{/i} 까마득한 옛날의 그 말썽꾸러기? 이제는 매혹적이고... 대담하며... 거리낌 없이 요염한 젊은 여성으로 변해버린."
+        },
+        {
+          "id": "narration_064ba2db9e",
+          "text": "생각들이 밀려오는 파도처럼 머릿속을 헤집는다. 그녀의 목소리가 부드럽게 메아리치고, 얼굴의 그림자, 미소, 몸매가 떠오른다."
+        },
+        {
+          "id": "narration_e99a27372e",
+          "text": "파도가 부서지듯, 그녀에 대한 기억이 나를 그곳으로 데려갈 때마다 심장이 더 거세게 뛴다. 매번 새로운 흥분을 안겨준다."
+        }
+      ]
+    },
+    {
+      "provider": "gemini",
+      "model": "gemini-2.5-flash",
+      "chunk": "ui_common",
+      "ok": true,
+      "elapsed_sec": 5.57,
+      "translation_count": 3,
+      "translations": [
+        {
+          "id": "string_502ccb6392",
+          "text": "자동 음성 재생 비활성화됨."
+        },
+        {
+          "id": "string_bc29c1341f",
+          "text": "클립보드 음성 재생 활성화됨."
+        },
+        {
+          "id": "string_204d097087",
+          "text": "자동 음성 재생 활성화됨."
+        }
+      ]
+    },
+    {
+      "provider": "gemini",
+      "model": "gemini-2.5-flash",
+      "chunk": "atmosphere_alana",
+      "ok": true,
+      "elapsed_sec": 12.96,
+      "translation_count": 4,
+      "translations": [
+        {
+          "id": "dialogue_44642194b6",
+          "text": "또 한 번의 봄. 하나가 가고, 또 하나가 올 터."
+        },
+        {
+          "id": "dialogue_fd11d0ce31",
+          "text": "이... 이게 대체 무엇이람?"
+        },
+        {
+          "id": "dialogue_58deffe52f",
+          "text": "무성한 가지. 푸른 잎사귀. 약속되었던 그 꽃들이 피어나는 것인가?"
+        },
+        {
+          "id": "dialogue_9714c82513",
+          "text": "영원처럼 긴 시간 끝에 처음으로, 불가능했던 일이 믿을 수 있을 만큼 가까이 다가온 듯하구나. 이리도 가득 찬 모습은 처음 보는구나! 그리고 이 꽃들..."
+        }
+      ]
+    },
+    {
+      "provider": "gemini",
+      "model": "gemini-2.5-flash",
+      "chunk": "story_grace",
+      "ok": true,
+      "elapsed_sec": 11.37,
+      "translation_count": 4,
+      "translations": [
+        {
+          "id": "narration_32e0176d76",
+          "text": "어제 일어난 일들이 너무나 생생하여 잠을 청할 수 없었다."
+        },
+        {
+          "id": "narration_7758c68c2f",
+          "text": "그레이스? {i}그레이스 맥클라우드?{/i} 오래전 그 개구쟁이 꼬마가? 이제는 매혹적이고... 대담하며... 노골적으로 유혹적인 젊은 여인으로 변모했다니."
+        },
+        {
+          "id": "narration_064ba2db9e",
+          "text": "생각들이 해일처럼 밀려와 내 마음을 휩쓸었다. 그녀의 목소리 희미한 메아리, 얼굴의 그림자, 미소, 그리고 몸까지."
+        },
+        {
+          "id": "narration_e99a27372e",
+          "text": "파도가 부서지고, 그녀에 대한 기억이 나를 그곳으로 이끌 때마다 심장이 더욱 거세게 울렸다. 매번 새로운 차원의 흥분을 안겨주었다."
+        }
+      ]
+    },
+    {
+      "provider": "gemini",
+      "model": "gemini-2.5-pro",
+      "chunk": "ui_common",
+      "ok": false,
+      "elapsed_sec": 9.51,
+      "error": "429 You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.5-pro\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.5-pro\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.5-pro\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.5-pro\nPlease retry in 58.604267388s. [links {\n  description: \"Learn more about Gemini API quotas\"\n  url: \"https://ai.google.dev/gemini-api/docs/rate-limits\"\n}\n, violations {\n  quota_metric: \"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count\"\n  quota_id: \"GenerateContentInputTokensPerModelPerDay-FreeTier\"\n  quota_dimensions {\n    key: \"model\"\n    value: \"gemini-2.5-pro\"\n  }\n  quota_dimensions {\n    key: \"location\"\n    value: \"global\"\n  }\n}\nviolations {\n  quota_metric: \"generativelanguage.googleapis.com/generate_content_free_tier_requests\"\n  quota_id: \"GenerateRequestsPerDayPerProjectPerModel-FreeTier\"\n  quota_dimensions {\n    key: \"model\"\n    value: \"gemini-2.5-pro\"\n  }\n  quota_dimensions {\n    key: \"location\"\n    value: \"global\"\n  }\n}\nviolations {\n  quota_metric: \"generativelanguage.googleapis.com/generate_content_free_tier_requests\"\n  quota_id: \"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\"\n  quota_dimensions {\n    key: \"model\"\n    value: \"gemini-2.5-pro\"\n  }\n  quota_dimensions {\n    key: \"location\"\n    value: \"global\"\n  }\n}\nviolations {\n  quota_metric: \"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count\"\n  quota_id: \"GenerateContentInputTokensPerModelPerMinute-FreeTier\"\n  quota_dimensions {\n    key: \"model\"\n    value: \"gemini-2.5-pro\"\n  }\n  quota_dimensions {\n    key: \"location\"\n    value: \"global\"\n  }\n}\n, retry_delay {\n  seconds: 58\n}\n]"
+    },
+    {
+      "provider": "gemini",
+      "model": "gemini-2.5-pro",
+      "chunk": "atmosphere_alana",
+      "ok": false,
+      "elapsed_sec": 9.5,
+      "error": "429 You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.5-pro\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.5-pro\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.5-pro\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.5-pro\nPlease retry in 49.105991803s. [links {\n  description: \"Learn more about Gemini API quotas\"\n  url: \"https://ai.google.dev/gemini-api/docs/rate-limits\"\n}\n, violations {\n  quota_metric: \"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count\"\n  quota_id: \"GenerateContentInputTokensPerModelPerDay-FreeTier\"\n  quota_dimensions {\n    key: \"model\"\n    value: \"gemini-2.5-pro\"\n  }\n  quota_dimensions {\n    key: \"location\"\n    value: \"global\"\n  }\n}\nviolations {\n  quota_metric: \"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count\"\n  quota_id: \"GenerateContentInputTokensPerModelPerMinute-FreeTier\"\n  quota_dimensions {\n    key: \"model\"\n    value: \"gemini-2.5-pro\"\n  }\n  quota_dimensions {\n    key: \"location\"\n    value: \"global\"\n  }\n}\nviolations {\n  quota_metric: \"generativelanguage.googleapis.com/generate_content_free_tier_requests\"\n  quota_id: \"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\"\n  quota_dimensions {\n    key: \"model\"\n    value: \"gemini-2.5-pro\"\n  }\n  quota_dimensions {\n    key: \"location\"\n    value: \"global\"\n  }\n}\nviolations {\n  quota_metric: \"generativelanguage.googleapis.com/generate_content_free_tier_requests\"\n  quota_id: \"GenerateRequestsPerDayPerProjectPerModel-FreeTier\"\n  quota_dimensions {\n    key: \"model\"\n    value: \"gemini-2.5-pro\"\n  }\n  quota_dimensions {\n    key: \"location\"\n    value: \"global\"\n  }\n}\n, retry_delay {\n  seconds: 49\n}\n]"
+    },
+    {
+      "provider": "gemini",
+      "model": "gemini-2.5-pro",
+      "chunk": "story_grace",
+      "ok": false,
+      "elapsed_sec": 9.51,
+      "error": "429 You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.5-pro\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.5-pro\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.5-pro\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.5-pro\nPlease retry in 39.607302054s. [links {\n  description: \"Learn more about Gemini API quotas\"\n  url: \"https://ai.google.dev/gemini-api/docs/rate-limits\"\n}\n, violations {\n  quota_metric: \"generativelanguage.googleapis.com/generate_content_free_tier_requests\"\n  quota_id: \"GenerateRequestsPerDayPerProjectPerModel-FreeTier\"\n  quota_dimensions {\n    key: \"model\"\n    value: \"gemini-2.5-pro\"\n  }\n  quota_dimensions {\n    key: \"location\"\n    value: \"global\"\n  }\n}\nviolations {\n  quota_metric: \"generativelanguage.googleapis.com/generate_content_free_tier_requests\"\n  quota_id: \"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\"\n  quota_dimensions {\n    key: \"model\"\n    value: \"gemini-2.5-pro\"\n  }\n  quota_dimensions {\n    key: \"location\"\n    value: \"global\"\n  }\n}\nviolations {\n  quota_metric: \"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count\"\n  quota_id: \"GenerateContentInputTokensPerModelPerMinute-FreeTier\"\n  quota_dimensions {\n    key: \"model\"\n    value: \"gemini-2.5-pro\"\n  }\n  quota_dimensions {\n    key: \"location\"\n    value: \"global\"\n  }\n}\nviolations {\n  quota_metric: \"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count\"\n  quota_id: \"GenerateContentInputTokensPerModelPerDay-FreeTier\"\n  quota_dimensions {\n    key: \"model\"\n    value: \"gemini-2.5-pro\"\n  }\n  quota_dimensions {\n    key: \"location\"\n    value: \"global\"\n  }\n}\n, retry_delay {\n  seconds: 39\n}\n]"
+    },
+    {
+      "provider": "codex",
+      "model": "gpt-5-mini",
+      "chunk": "ui_common",
+      "ok": false,
+      "elapsed_sec": 4.67,
+      "error": "ERROR: {\"type\":\"error\",\"status\":400,\"error\":{\"type\":\"invalid_request_error\",\"message\":\"The 'gpt-5-mini' model is not supported when using Codex with a ChatGPT account.\"}}"
+    },
+    {
+      "provider": "codex",
+      "model": "gpt-5-mini",
+      "chunk": "atmosphere_alana",
+      "ok": false,
+      "elapsed_sec": 3.24,
+      "error": "ERROR: {\"type\":\"error\",\"status\":400,\"error\":{\"type\":\"invalid_request_error\",\"message\":\"The 'gpt-5-mini' model is not supported when using Codex with a ChatGPT account.\"}}"
+    },
+    {
+      "provider": "codex",
+      "model": "gpt-5-mini",
+      "chunk": "story_grace",
+      "ok": false,
+      "elapsed_sec": 3.36,
+      "error": "ERROR: {\"type\":\"error\",\"status\":400,\"error\":{\"type\":\"invalid_request_error\",\"message\":\"The 'gpt-5-mini' model is not supported when using Codex with a ChatGPT account.\"}}"
+    },
+    {
+      "provider": "codex",
+      "model": "gpt-5.1-codex-mini",
+      "chunk": "ui_common",
+      "ok": true,
+      "elapsed_sec": 7.19,
+      "translation_count": 3,
+      "translations": [
+        {
+          "id": "string_502ccb6392",
+          "text": "자체 음성 출력 비활성화됨."
+        },
+        {
+          "id": "string_bc29c1341f",
+          "text": "클립보드 음성 출력 활성화됨. "
+        },
+        {
+          "id": "string_204d097087",
+          "text": "자체 음성 출력 활성화됨. "
+        }
+      ]
+    },
+    {
+      "provider": "codex",
+      "model": "gpt-5.1-codex-mini",
+      "chunk": "atmosphere_alana",
+      "ok": true,
+      "elapsed_sec": 8.58,
+      "translation_count": 4,
+      "translations": [
+        {
+          "id": "dialogue_44642194b6",
+          "text": "봄 하나 더. 지나간 봄, 오려는 봄."
+        },
+        {
+          "id": "dialogue_fd11d0ce31",
+          "text": "이, 이곳에 무엇이 있나요?"
+        },
+        {
+          "id": "dialogue_58deffe52f",
+          "text": "무성한 가지. 푸른 잎새. 약속된 꽃망울인가요?"
+        },
+        {
+          "id": "dialogue_9714c82513",
+          "text": "영겁래 처음으로, 불가능한 것이 믿을 만큼 가까이 보여요. 이렇게 충만한 너를 본 적이 없었어요! 그리고 이 꽃들도…"
+        }
+      ]
+    },
+    {
+      "provider": "codex",
+      "model": "gpt-5.1-codex-mini",
+      "chunk": "story_grace",
+      "ok": true,
+      "elapsed_sec": 9.37,
+      "translation_count": 4,
+      "translations": [
+        {
+          "id": "narration_32e0176d76",
+          "text": "어젯밤의 일이 머릿속에서 너무 선명히 살아 숨 쉬어서, 잠이 오질 않는다."
+        },
+        {
+          "id": "narration_7758c68c2f",
+          "text": "Grace? {i}Grace MacLeod?{/i} 오래전 우리를 놀렸던 그 작은 말썽꾸러기인가? 이제는 유혹적이고... 대담하며... 거침없이 감정을 드러내는 젊은 여인이 되어 버렸구나."
+        },
+        {
+          "id": "narration_064ba2db9e",
+          "text": "생각들이 마치 밀물처럼 내 속에서 몰려온다. 그녀 목소리의 부드러운 울림, 얼굴의 그림자, 미소와 몸짓이 여운으로 남는다."
+        },
+        {
+          "id": "narration_e99a27372e",
+          "text": "파도가 부딪히듯 그 기억 속으로 빠져들 때마다 심장이 더 크게 고동치고, 매번 또다른 설렘이 솟아난다."
+        }
+      ]
+    },
+    {
+      "provider": "codex",
+      "model": "gpt-5.1-codex",
+      "chunk": "ui_common",
+      "ok": true,
+      "elapsed_sec": 9.65,
+      "translation_count": 3,
+      "translations": [
+        {
+          "id": "string_502ccb6392",
+          "text": "자가 낭독 비활성화됨."
+        },
+        {
+          "id": "string_bc29c1341f",
+          "text": "클립보드 낭독 활성화됨. "
+        },
+        {
+          "id": "string_204d097087",
+          "text": "자가 낭독 활성화됨. "
+        }
+      ]
+    },
+    {
+      "provider": "codex",
+      "model": "gpt-5.1-codex",
+      "chunk": "atmosphere_alana",
+      "ok": true,
+      "elapsed_sec": 7.08,
+      "translation_count": 4,
+      "translations": [
+        {
+          "id": "dialogue_44642194b6",
+          "text": "봄이 하나 더. 또 하나는 지나갔고, 또 하나가 다가오는구나."
+        },
+        {
+          "id": "dialogue_fd11d0ce31",
+          "text": "이, 이것이 뭐람?"
+        },
+        {
+          "id": "dialogue_58deffe52f",
+          "text": "가지가 무성하고, 잎이 짙푸르고… 약속된 꽃들이냐?"
+        },
+        {
+          "id": "dialogue_9714c82513",
+          "text": "영겁 만에 처음으로 불가능이 믿어질 만큼 곁에 와 있네. 이렇게 충만한 너는 본 적이 없어! 그런데 이 꽃들은…"
+        }
+      ]
+    },
+    {
+      "provider": "codex",
+      "model": "gpt-5.1-codex",
+      "chunk": "story_grace",
+      "ok": true,
+      "elapsed_sec": 9.02,
+      "translation_count": 4,
+      "translations": [
+        {
+          "id": "narration_32e0176d76",
+          "text": "전날의 일들이 머릿속에 너무도 선명하여 잠이 붙을 리 없다."
+        },
+        {
+          "id": "narration_7758c68c2f",
+          "text": "Grace? {i}Grace MacLeod?{/i} 수년 전 그 장난꾸러기 꼬맹이? 이제는 요염하고... 대담하고... 사양 모르는 농염한 아가씨로 변하다니."
+        },
+        {
+          "id": "narration_064ba2db9e",
+          "text": "생각들은 너울처럼 머릿속을 휘몰아친다. 그녀의 목소리 잔향, 얼굴의 그림자, 미소와 몸매까지가 부드럽게 스쳐 간다."
+        },
+        {
+          "id": "narration_e99a27372e",
+          "text": "그녀에 대한 추억을 따라가면 파도가 부딪히듯 가슴이 번번이 더 거세게 뛴다. 그때마다 새로운 격정이 한 겹씩 더해진다."
+        }
+      ]
+    }
+  ]
+}
