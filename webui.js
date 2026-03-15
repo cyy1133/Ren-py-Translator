@@ -197,6 +197,7 @@ const dom = {
     includeAdultCheckbox: document.getElementById("includeAdultCheckbox"),
     gamePathInput: document.getElementById("gamePathInput"),
     pickExeButton: document.getElementById("pickExeButton"),
+    generateTemplateButton: document.getElementById("generateTemplateButton"),
     analyzeGameButton: document.getElementById("analyzeGameButton"),
     uploadInput: document.getElementById("uploadInput"),
     uploadList: document.getElementById("uploadList"),
@@ -2790,6 +2791,74 @@ function populateFromAnalysis(analysis, label) {
 }
 
 
+async function downloadRenpySDK() {
+    addLog("Ren'Py SDK(약 150MB) 다운로드를 시작합니다...", "info");
+    dom.generateTemplateButton.textContent = "SDK 다운로드 중...";
+    try {
+        const response = await apiPost("/download_renpy_sdk", {});
+        addLog(response.message || "Ren'Py SDK 다운로드 완료", "success");
+        return true;
+    } catch (error) {
+        addLog(`SDK 다운로드 실패: ${error.message}`, "error");
+        alert(`❌ SDK 다운로드 중 오류가 발생했습니다.\n${error.message}`);
+        return false;
+    }
+}
+
+async function generateTemplate() {
+    const gamePath = dom.gamePathInput.value.trim();
+    if (!gamePath) {
+        addLog("EXE 경로가 비어 있습니다.", "error");
+        return;
+    }
+    const targetLang = dom.targetLanguageInput.value.trim() || "ko";
+    
+    dom.generateTemplateButton.disabled = true;
+    const originalText = dom.generateTemplateButton.textContent;
+    dom.generateTemplateButton.textContent = "뼈대 준비 중...";
+    addLog(`템플릿 생성 요청: 언어[${targetLang}]`, "info");
+    
+    try {
+        const response = await apiPost("/generate_template", {
+            game_exe_path: gamePath,
+            target_language: targetLang,
+        });
+        
+        if (response.status === "cached") {
+            addLog(response.message, "success");
+            alert(`✅ ${response.message}\n바로 [게임 분석] 버튼을 눌러주세요.`);
+        } else if (response.status === "success") {
+            addLog(response.message, "success");
+            alert(`✅ 템플릿 자동 추출 완료!\n이제 [게임 분석] 버튼을 눌러 번역을 시작하세요.`);
+        } else {
+            addLog(`알 수 없는 응답: ${JSON.stringify(response)}`, "warning");
+        }
+    } catch (error) {
+        if (error.message.includes("SDK_MISSING")) {
+            const wantsDownload = confirm("Ren'Py SDK(약 150MB)가 설치되어 있지 않습니다.\n템플릿(뼈대) 추출을 위해 공식 SDK를 다운로드하시겠습니까?\n(다운로드 중에는 잠시 멈춘 것처럼 보일 수 있습니다.)");
+            if (wantsDownload) {
+                const downloadSuccess = await downloadRenpySDK();
+                if (downloadSuccess) {
+                    // 다운로드 성공 시 다시 템플릿 생성 시도
+                    dom.generateTemplateButton.disabled = false;
+                    dom.generateTemplateButton.textContent = originalText;
+                    await generateTemplate();
+                    return; // 재귀 호출 완료 후 종료
+                }
+            } else {
+                addLog("사용자가 SDK 다운로드를 취소했습니다.", "warning");
+            }
+        } else {
+            addLog(`템플릿 생성 실패: ${error.message}`, "error");
+            alert(`❌ 템플릿 생성 중 오류가 발생했습니다.\n${error.message}`);
+        }
+    } finally {
+        dom.generateTemplateButton.disabled = false;
+        dom.generateTemplateButton.textContent = originalText;
+    }
+}
+
+
 async function analyzeGame() {
     const gamePath = dom.gamePathInput.value.trim();
     if (!gamePath) {
@@ -3944,6 +4013,7 @@ function init() {
     dom.setupOpenAIOAuthButton.addEventListener("click", setupOpenAIOAuth);
     dom.checkOpenAIOAuthButton.addEventListener("click", checkOpenAIOAuthStatus);
     dom.pickExeButton.addEventListener("click", pickExeAndAnalyze);
+    dom.generateTemplateButton.addEventListener("click", generateTemplate);
     dom.analyzeGameButton.addEventListener("click", analyzeGame);
     dom.uploadInput.addEventListener("change", handleUploadChange);
     dom.analyzeUploadsButton.addEventListener("click", analyzeUploads);

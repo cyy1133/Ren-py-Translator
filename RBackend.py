@@ -5565,6 +5565,123 @@ def pick_game_exe() -> Any:
     except Exception as exc:  # noqa: BLE001
         return jsonify({"error": str(exc)}), 500
 
+@app.route("/generate_template", methods=["POST"])
+def generate_template() -> Any:
+    log_message("'/generate_template' 요청 받음")
+    payload = request.get_json(force=True) or {}
+
+    game_exe_path = payload.get("game_exe_path")
+    target_language = payload.get("target_language")
+
+    if not game_exe_path or not target_language:
+        return jsonify({"error": "game_exe_path와 target_language가 필요합니다."}), 400
+
+    game_dir_str = find_game_directory(game_exe_path)
+    if not game_dir_str:
+        return jsonify({"error": "'game' 폴더를 찾을 수 없습니다."}), 400
+
+    game_dir = Path(game_dir_str)
+    # SDK가 설치되어 있는지 확인
+    sdk_dir = current_dir / "renpy_sdk"
+    sdk_exe_paths = list(sdk_dir.glob("renpy-*-sdk/renpy.exe"))
+    
+    if not sdk_dir.is_dir() or not sdk_exe_paths:
+        log_message("Ren'Py SDK가 설치되지 않아 템플릿 생성을 진행할 수 없습니다.")
+        return jsonify({"error": "SDK_MISSING", "message": "Ren'Py SDK가 필요합니다. 다운로드를 진행하시겠습니까?"}), 400
+        
+    sdk_exe = str(sdk_exe_paths[0])
+    
+    tl_dir = game_dir / "tl" / target_language
+
+    # 캐시 확인: 이미 템플릿 파일(.rpy)이 하나라도 있다면 추출 생략
+    if tl_dir.is_dir() and any(tl_dir.glob("*.rpy")):
+        log_message(f"[{target_language}] 언어 폴더에 이미 번역 템플릿 파일이 존재합니다 (캐시 활용).")
+        return jsonify({"status": "cached", "message": "이미 번역 템플릿이 존재하여 추출을 건너뛰었습니다."}), 200
+
+    log_message(f"[{target_language}] 번역 템플릿 생성을 시작합니다...")
+    # Ren'Py 엔진으로 템플릿 추출 명령 실행
+    # 명령어: [game_exe_path] [game_dir] translate [target_language]
+    cmd = [sdk_exe, game_dir_str, "translate", target_language]
+    
+    try:
+        # 백그라운드 서버 블로킹 방지를 위해 적절한 타임아웃(예: 300초) 설정 및 인코딩 방어
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
+        
+        # 엔진 출력에 따른 리턴코드가 1이어도 실제 파일은 정상 생성되는 경우가 있으므로 파일 우선 확인
+        if tl_dir.is_dir() and any(tl_dir.glob("*.rpy")):
+            log_message(f"[{target_language}] 번역 템플릿 생성 완료.")
+            return jsonify({"status": "success", "message": "번역 템플릿 추출이 완료되었습니다."}), 200
+        else:
+            if result.returncode == 0:
+                log_message("명령어는 성공했으나 파일이 생성되지 않음.")
+                return jsonify({"error": "명령은 성공했지만 템플릿 파일이 보이지 않습니다."}), 500
+            else:
+                # 에러 메시지를 로깅할 때, 비표준 문자로 인해 터미널 로거가 터지는 현상 방지: ascii.encode
+                err_text = ""
+                if result.stderr: err_text += result.stderr + "\n"
+                if result.stdout: err_text += result.stdout
+                
+                safe_err = err_text.encode('ascii', 'replace').decode('ascii') if err_text else "Unknown error (No stdout/stderr)"
+                log_message(f"템플릿 추출 실패:\n{safe_err}")
+                return jsonify({"error": f"엔진 추출 중 파일이 생성되지 않았으며 오류가 발생했습니다:\n{safe_err}"}), 500
+    except subprocess.TimeoutExpired:
+        # 시간 초과 시에도 파일이 일부/전부 생성되었을 수 있으므로 확인
+        if tl_dir.is_dir() and any(tl_dir.glob("*.rpy")):
+            log_message(f"[{target_language}] 타임아웃이 발생했으나 템플릿 파일은 생성되어 무시합니다.")
+            return jsonify({"status": "success", "message": "과정이 오래 걸렸으나 번역 템플릿 추출은 일부/전부 완료되었습니다."}), 200
+        else:    
+            log_message("템플릿 추출 시간 초과.")
+            return jsonify({"error": "템플릿 추출 시간이 초과되었습니다 (5분). 수동으로 진행해주세요."}), 504
+    except Exception as e:
+        safe_e = str(e).encode('ascii', 'replace').decode('ascii')
+        log_message(f"템플릿 추출 중 예외 발생: {safe_e}")
+        return jsonify({"error": f"템플릿 추출 중 오류: {safe_e}"}), 500
+
+
+@app.route("/download_renpy_sdk", methods=["POST"])
+def download_renpy_sdk():
+    """
+    Ren'Py SDK 8.3.4를 워크벤치/renpy_sdk 내부에 다운로드 및 압축 해제
+    """
+    import urllib.request
+    import zipfile
+    import tempfile
+    import shutil
+    
+    sdk_dir = current_dir / "renpy_sdk"
+    sdk_url = "https://www.renpy.org/dl/8.3.4/renpy-8.3.4-sdk.zip"
+    
+    # 이미 설치되어 있는지 확인
+    if sdk_dir.is_dir() and any(sdk_dir.glob("renpy-*-sdk/renpy.exe")):
+        return jsonify({"status": "success", "message": "Ren'Py SDK가 이미 설치되어 있습니다."}), 200
+
+    try:
+        log_message("Ren'Py SDK 다운로드 시작 (약 150MB)...")
+        # 임시 파일로 다운로드
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp_file:
+            temp_path = tmp_file.name
+            
+        urllib.request.urlretrieve(sdk_url, temp_path)
+        log_message("Ren'Py SDK 다운로드 완료. 압축 해제 중...")
+        
+        # 압축 해제
+        sdk_dir.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(temp_path, 'r') as zip_ref:
+            zip_ref.extractall(sdk_dir)
+            
+        # 임시 파일 삭제
+        try:
+            os.remove(temp_path)
+        except:
+            pass
+            
+        log_message("Ren'Py SDK 설치 완료.")
+        return jsonify({"status": "success", "message": "Ren'Py SDK를 성공적으로 다운로드했습니다."}), 200
+        
+    except Exception as e:
+        safe_e = str(e).encode('ascii', 'replace').decode('ascii')
+        log_message(f"Ren'Py SDK 설치 중 오류: {safe_e}")
+        return jsonify({"error": f"SDK 다운로드 중 오류 발생: {safe_e}"}), 500
 
 @app.route("/analyze_sources", methods=["POST"])
 def analyze_sources() -> Any:
