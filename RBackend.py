@@ -2610,7 +2610,11 @@ def infer_world_defaults(
         "UI 문자열과 대사는 문체를 분리",
     ]
     if period_score > modern_score:
-        style_rules_parts.append("완전한 현대 구어체보다 시대감 있는 한국어 어휘를 우선 검토")
+        style_rules_parts.append(
+            "시대감 있는 어휘는 자연스럽게 활용하되, "
+            "대사 말투는 격식 종결어미(-습니다/-겠습니다 등 하오체/합쇼체)를 쓰지 말고 "
+            "각 캐릭터 guidance에 명시된 구어체를 유지할 것"
+        )
 
     protected_terms = []
     for term in glossary_terms[:6]:
@@ -2704,6 +2708,9 @@ def infer_character_defaults(character_stat: Dict[str, Any]) -> Dict[str, str]:
         notes_markers.append("주요 서사 축에 속할 가능성이 높으므로 호칭/말투 일관성 우선")
     elif line_count < 40:
         notes_markers.append("짧은 등장분량이라도 말버릇이 있으면 유지")
+
+    # 어떤 비-UI 캐릭터든 격식체(하오체) 방지 안내를 notes 맨 앞에 추가
+    notes_markers.insert(0, "격식 종결어미(-습니다/-겠습니다/-입니다 등 하오체/합쇼체) 사용 금지, 구어체 유지")
 
     return {
         "display_name": display_name,
@@ -6076,6 +6083,113 @@ def handle_translation() -> Any:
                 "status_path": str(session_runtime.status_path),
             }
         return jsonify(payload), 500
+
+
+@app.route("/search_dialogue", methods=["POST"])
+def search_dialogue():
+    """번역 파일에서 영어/한국어 대사를 검색합니다."""
+    try:
+        payload = request.get_json(force=True) or {}
+        query = (payload.get("query") or "").strip()
+        game_exe_path = payload.get("game_exe_path") or game_exe_path_from_startup
+        max_results = min(int(payload.get("max_results") or 50), 200)
+
+        if not query:
+            return jsonify({"error": "query가 필요합니다."}), 400
+        if not game_exe_path:
+            return jsonify({"error": "game_exe_path가 필요합니다."}), 400
+
+        game_dir_str = find_game_directory(game_exe_path)
+        if not game_dir_str:
+            return jsonify({"error": "game 폴더를 찾지 못했습니다."}), 400
+
+        game_dir = Path(game_dir_str)
+        tl_root = game_dir / "tl"
+        source_root = game_dir / "_translator_output" / "ko_source"
+
+        query_lower = query.lower()
+        results = []
+
+        # translate 블록 파싱: comment 라인(영어) + 번역 라인(한국어)
+        BLOCK_LABEL_RE = re.compile(r"^\s*translate\s+\S+\s+(\S+)\s*:\s*$")
+        COMMENT_RE = re.compile(r'^\s*#\s*(?:[a-zA-Z_]\w*\s+)?"(.*)"')
+        TRANS_LINE_RE_SEARCH = re.compile(r'^\s*(?:([a-zA-Z_]\w*)\s+)?"(.*)"')
+
+        def search_tl_file(rpy_path: Path, lang_folder: str) -> None:
+            try:
+                lines = rpy_path.read_text(encoding="utf-8", errors="replace").splitlines()
+            except Exception:
+                return
+            i = 0
+            while i < len(lines):
+                if BLOCK_LABEL_RE.match(lines[i]):
+                    block_start = i
+                    en_text = ""
+                    ko_text = ""
+                    j = i + 1
+                    while j < len(lines):
+                        if BLOCK_LABEL_RE.match(lines[j]):
+                            break
+                        cm = COMMENT_RE.match(lines[j])
+                        if cm and not en_text:
+                            en_text = cm.group(1)
+                        elif lines[j].strip() and not lines[j].strip().startswith("#") and not ko_text:
+                            tm = TRANS_LINE_RE_SEARCH.match(lines[j])
+                            if tm:
+                                ko_text = tm.group(2)
+                        j += 1
+                    if en_text and (query_lower in en_text.lower() or query_lower in ko_text.lower()):
+                        results.append({
+                            "file": rpy_path.name,
+                            "lang": lang_folder,
+                            "line": block_start + 1,
+                            "en": en_text,
+                            "ko": ko_text,
+                        })
+                        if len(results) >= max_results:
+                            return
+                    i = j
+                else:
+                    # strings 형식 (old/new)
+                    if lines[i].strip().startswith('old "'):
+                        old_text = lines[i].strip()[5:-1]
+                        new_text = ""
+                        if i + 1 < len(lines) and lines[i + 1].strip().startswith('new "'):
+                            new_text = lines[i + 1].strip()[5:-1]
+                        if query_lower in old_text.lower() or query_lower in new_text.lower():
+                            results.append({
+                                "file": rpy_path.name,
+                                "lang": lang_folder,
+                                "line": i + 1,
+                                "en": old_text,
+                                "ko": new_text,
+                            })
+                            if len(results) >= max_results:
+                                return
+                    i += 1
+
+        # tl 폴더 내 언어 폴더들을 검색
+        searched_files = 0
+        if tl_root.is_dir():
+            for lang_dir in sorted(tl_root.iterdir()):
+                if not lang_dir.is_dir():
+                    continue
+                for rpy_file in sorted(lang_dir.glob("*.rpy")):
+                    search_tl_file(rpy_file, lang_dir.name)
+                    searched_files += 1
+                    if len(results) >= max_results:
+                        break
+                if len(results) >= max_results:
+                    break
+
+        return jsonify({
+            "query": query,
+            "result_count": len(results),
+            "searched_files": searched_files,
+            "results": results,
+        })
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": str(exc)}), 500
 
 
 if __name__ == "__main__":

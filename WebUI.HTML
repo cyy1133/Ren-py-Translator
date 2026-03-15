@@ -428,6 +428,37 @@
                 <div id="documentEditor" class="document-editor empty-state">편집할 파일을 먼저 불러오세요.</div>
             </section>
 
+            <section class="panel stack tab-panel" data-panel="search">
+                <div class="section-heading">
+                    <p class="section-kicker">Search</p>
+                    <h2>번역 대사 검색</h2>
+                </div>
+                <p class="helper-text">
+                    영어 원문 또는 한국어 번역문의 키워드로 게임 tl 폴더 전체를 검색합니다.
+                    게임 분석이 완료된 상태에서 사용하세요.
+                </p>
+                <div class="editor-toolbar">
+                    <label class="field">
+                        <span>검색어 (영어 또는 한국어)</span>
+                        <div class="inline-action">
+                            <input type="search" id="dialogueSearchInput" placeholder="예: wolf 또는 늑대" style="flex:1">
+                            <label class="field compact-field" style="min-width:100px">
+                                <span>최대 결과</span>
+                                <select id="dialogueSearchLimit">
+                                    <option value="30">30개</option>
+                                    <option value="50" selected>50개</option>
+                                    <option value="100">100개</option>
+                                    <option value="200">200개</option>
+                                </select>
+                            </label>
+                            <button type="button" id="dialogueSearchButton">검색</button>
+                        </div>
+                    </label>
+                </div>
+                <p class="helper-text" id="dialogueSearchStatus"></p>
+                <div id="dialogueSearchResults" class="document-editor empty-state">검색어를 입력하고 검색 버튼을 누르세요.</div>
+            </section>
+
             <section class="panel stack tab-panel" data-panel="results">
                 <div class="section-heading">
                     <p class="section-kicker">Results</p>

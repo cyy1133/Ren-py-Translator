@@ -4021,3 +4021,94 @@ dom.adultQueue?.addEventListener("click", (event) => {
     handleAdultQueueClick(event).catch(() => {});
 });
 renderDocumentEditor();
+
+
+// ─── 대사 검색 기능 ────────────────────────────────────────────────
+async function runDialogueSearch() {
+    const query = document.getElementById("dialogueSearchInput")?.value?.trim();
+    const limitEl = document.getElementById("dialogueSearchLimit");
+    const maxResults = parseInt(limitEl?.value || "50", 10);
+    const statusEl = document.getElementById("dialogueSearchStatus");
+    const resultsEl = document.getElementById("dialogueSearchResults");
+    const gamePath = dom.gamePathInput?.value?.trim();
+
+    if (!query) {
+        if (statusEl) { statusEl.textContent = "검색어를 입력하세요."; }
+        return;
+    }
+    if (!gamePath) {
+        if (statusEl) { statusEl.textContent = "먼저 게임 EXE 경로를 입력하고 분석을 실행하세요."; }
+        return;
+    }
+
+    if (statusEl) { statusEl.textContent = "검색 중..."; }
+    if (resultsEl) {
+        resultsEl.className = "document-editor empty-state";
+        resultsEl.textContent = "검색 중...";
+    }
+
+    try {
+        const data = await apiPost("/search_dialogue", {
+            query,
+            game_exe_path: gamePath,
+            max_results: maxResults,
+        });
+
+        if (statusEl) {
+            statusEl.textContent = `결과 ${data.result_count}건 (파일 ${data.searched_files}개 검색됨)`;
+        }
+
+        if (!data.results || data.results.length === 0) {
+            if (resultsEl) {
+                resultsEl.className = "document-editor empty-state";
+                resultsEl.textContent = `"${query}"에 해당하는 번역 대사를 찾지 못했습니다.`;
+            }
+            return;
+        }
+
+        const rows = data.results.map((item) => `
+            <tr>
+                <td class="search-result-file">${escapeHtml(item.file)}</td>
+                <td class="search-result-lang"><span class="pill subtle">${escapeHtml(item.lang)}</span></td>
+                <td class="search-result-line">${escapeHtml(String(item.line))}</td>
+                <td class="search-result-en">${escapeHtml(item.en)}</td>
+                <td class="search-result-ko">${escapeHtml(item.ko || "(번역 없음)")}</td>
+            </tr>
+        `).join("");
+
+        if (resultsEl) {
+            resultsEl.className = "document-editor";
+            resultsEl.innerHTML = `
+                <div style="overflow-x:auto">
+                    <table class="search-result-table">
+                        <thead>
+                            <tr>
+                                <th>파일</th>
+                                <th>언어팩</th>
+                                <th>줄</th>
+                                <th>영어 원문</th>
+                                <th>한국어 번역</th>
+                            </tr>
+                        </thead>
+                        <tbody>${rows}</tbody>
+                    </table>
+                </div>
+            `;
+        }
+    } catch (error) {
+        if (statusEl) { statusEl.textContent = `검색 실패: ${error.message}`; }
+        if (resultsEl) {
+            resultsEl.className = "document-editor empty-state";
+            resultsEl.textContent = `검색 중 오류가 발생했습니다: ${error.message}`;
+        }
+    }
+}
+
+document.getElementById("dialogueSearchButton")?.addEventListener("click", () => {
+    runDialogueSearch().catch(() => {});
+});
+document.getElementById("dialogueSearchInput")?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+        runDialogueSearch().catch(() => {});
+    }
+});
