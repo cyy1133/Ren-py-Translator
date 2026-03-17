@@ -155,6 +155,8 @@ const state = {
     uploadedFiles: [],
     analysis: null,
     selectedFiles: new Set(),
+    fileSelectionCustomized: false,
+    fileSelectionAnalysisKey: "",
     characterProfiles: {},
     activeTab: "overview",
     selectedCharacterId: null,
@@ -171,6 +173,56 @@ const state = {
     editorSearchQuery: "",
     editorDrafts: {},
 };
+
+
+function buildAnalysisFileSelectionKey(analysis) {
+    const filePaths = (analysis?.files || [])
+        .map((file) => file.file_relative_path || "")
+        .filter(Boolean)
+        .sort()
+        .join("|");
+    return [
+        analysis?.analysis_mode || "",
+        analysis?.source_label || "",
+        analysis?.target_language || "",
+        analysis?.game_dir || "",
+        filePaths,
+    ].join("::");
+}
+
+
+function updateFileSelectionState(availableFilePaths = null) {
+    const filePaths = Array.isArray(availableFilePaths)
+        ? availableFilePaths
+        : (state.analysis?.files || []).map((file) => file.file_relative_path);
+    const normalized = filePaths.filter((filePath) => state.selectedFiles.has(filePath));
+    state.selectedFiles = new Set(normalized);
+    state.fileSelectionCustomized = normalized.length > 0 && normalized.length < filePaths.length;
+    return normalized;
+}
+
+
+function applyAnalysisFileSelection(analysis, options = {}) {
+    const availableFilePaths = (analysis?.files || []).map((file) => file.file_relative_path);
+    const selectionMode = options.selectionMode || "reset";
+    if (!availableFilePaths.length) {
+        state.selectedFiles = new Set();
+        state.fileSelectionCustomized = false;
+        state.fileSelectionAnalysisKey = buildAnalysisFileSelectionKey(analysis);
+        return availableFilePaths;
+    }
+
+    if (selectionMode === "preserve") {
+        const preservedSelection = availableFilePaths.filter((filePath) => state.selectedFiles.has(filePath));
+        state.selectedFiles = new Set(preservedSelection.length ? preservedSelection : availableFilePaths);
+    } else {
+        state.selectedFiles = new Set(availableFilePaths);
+    }
+
+    updateFileSelectionState(availableFilePaths);
+    state.fileSelectionAnalysisKey = buildAnalysisFileSelectionKey(analysis);
+    return availableFilePaths;
+}
 
 const dom = {
     providerSelect: document.getElementById("providerSelect"),
@@ -1189,6 +1241,21 @@ function normalizeProtectedTerms(value) {
 }
 
 
+function sanitizeLegacyPublishSettings(publishSettings = {}, targetLanguage = "") {
+    const normalizedTarget = String(targetLanguage || "ko")
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]+/g, "_")
+        .replace(/^_+|_+$/g, "") || "ko";
+    const next = { ...(publishSettings || {}) };
+    const languageCode = String(next.language_code || "").trim().toLowerCase();
+    if (languageCode === `${normalizedTarget}_ai`) {
+        next.language_code = `${normalizedTarget}_workbench`;
+    }
+    return next;
+}
+
+
 function renderPublishBaseline() {
     const baseline = state.analysis?.gui_baseline;
     if (!baseline || !Object.keys(baseline).length) {
@@ -2078,7 +2145,7 @@ async function refreshAnalysisAfterManualSave({
     activateTabName = state.activeTab,
 } = {}) {
     const analysis = await apiPost("/analyze_sources", buildCurrentAnalysisPayload());
-    populateFromAnalysis(analysis, "수동 편집 반영");
+            populateFromAnalysis(analysis, "수동 편집 반영", { selectionMode: "preserve" });
     if (reloadEditor && preferredFilePath) {
         try {
             await loadEditableDocument(preferredFilePath, {
@@ -2760,13 +2827,11 @@ function renderResults(payload = { results: [] }) {
 }
 
 
-function populateFromAnalysis(analysis, label) {
+function populateFromAnalysis(analysis, label, options = {}) {
     captureCurrentCharacterProfiles();
     state.analysis = analysis;
     clearTonePreview();
-    const availableFilePaths = (analysis.files || []).map((file) => file.file_relative_path);
-    const preservedSelection = availableFilePaths.filter((filePath) => state.selectedFiles.has(filePath));
-    state.selectedFiles = new Set(preservedSelection.length ? preservedSelection : availableFilePaths);
+    const availableFilePaths = applyAnalysisFileSelection(analysis, options);
     state.characterProfiles = {
         ...(analysis.default_character_profiles || {}),
         ...state.characterProfiles,
@@ -2859,11 +2924,15 @@ async function generateTemplate() {
 }
 
 
-async function analyzeGame() {
+async function analyzeGame(options = {}) {
     const gamePath = dom.gamePathInput.value.trim();
     if (!gamePath) {
-        addLog("게임 경로가 비어 있습니다.", "error");
-        return;
+        const error = new Error("게임 경로가 비어 있습니다.");
+        addLog(error.message, "error");
+        if (options.raiseOnError) {
+            throw error;
+        }
+        return null;
     }
     dom.analyzeGameButton.disabled = true;
     addLog(`게임 분석 요청: ${gamePath}`);
@@ -2872,11 +2941,19 @@ async function analyzeGame() {
             game_exe_path: gamePath,
             target_language: dom.targetLanguageInput.value.trim() || "ko",
         });
-        populateFromAnalysis(analysis, "게임 경로 분석");
+        populateFromAnalysis(analysis, "게임 경로 분석", {
+            selectionMode: options.selectionMode || "reset",
+        });
         addLog(`분석 완료: ${analysis.summary.file_count}개 파일 / ${analysis.summary.item_count}개 항목`, "success");
+        addLog(`파일 선택: ${state.selectedFiles.size}/${analysis.summary.file_count}`, "info");
         activateTab("overview");
+        return analysis;
     } catch (error) {
         addLog(`게임 분석 실패: ${error.message}`, "error");
+        if (options.raiseOnError) {
+            throw error;
+        }
+        return null;
     } finally {
         dom.analyzeGameButton.disabled = false;
     }
@@ -2915,7 +2992,7 @@ async function analyzeUploads() {
             files_data: state.uploadedFiles,
             target_language: dom.targetLanguageInput.value.trim() || "ko",
         });
-        populateFromAnalysis(analysis, "업로드 파일 분석");
+        populateFromAnalysis(analysis, "업로드 파일 분석", { selectionMode: "reset" });
         addLog(`업로드 분석 완료: ${analysis.summary.file_count}개 파일 / ${analysis.summary.item_count}개 항목`, "success");
         activateTab("overview");
     } catch (error) {
@@ -3082,6 +3159,9 @@ function buildTranslationPayload(options = {}) {
     if (!state.analysis) {
         throw new Error("먼저 분석을 실행하세요.");
     }
+    if (!state.selectedFiles.size) {
+        throw new Error("번역할 파일을 하나 이상 선택하세요.");
+    }
     const payload = {
         provider: dom.providerSelect.value,
         api_key: apiKey,
@@ -3151,6 +3231,9 @@ async function translateSelection(options = {}) {
         ? "openai-oauth"
         : payload.provider;
     addLog(`번역 요청 시작: ${payload.selected_files.length}개 파일 / runtime=${runtimeLabel}`);
+    if (state.analysis?.files?.length && payload.selected_files.length < state.analysis.files.length) {
+        addLog(`부분 번역 범위: 전체 ${state.analysis.files.length}개 중 ${payload.selected_files.length}개 파일만 선택됨`, "warning");
+    }
     addLog(`요청 범위: ${buildTranslationScopeLabel(payload)}`);
     try {
         const response = await apiPost("/translate", payload);
@@ -3227,6 +3310,7 @@ function buildProfilePayload() {
         publish_settings: collectPublishSettings(),
         character_profiles: collectCharacterProfiles(),
         selected_files: Array.from(state.selectedFiles),
+        analysis: state.analysis,
     };
 }
 
@@ -3240,7 +3324,61 @@ function saveProfile() {
 }
 
 
+function normalizeLoadedCharacterProfiles(value) {
+    if (Array.isArray(value)) {
+        return Object.fromEntries(
+            value
+                .filter((entry) => entry && typeof entry === "object" && entry.speaker_id)
+                .map((entry) => [String(entry.speaker_id), { ...entry }]),
+        );
+    }
+    if (value && typeof value === "object") {
+        return value;
+    }
+    return {};
+}
+
+
+function normalizeLoadedProfile(profile = {}) {
+    const normalized = (profile && typeof profile === "object") ? { ...profile } : {};
+    const targetLanguage = normalized.target_language || normalized.language || "ko";
+    return {
+        ...normalized,
+        provider: normalized.provider || normalized.translation_provider || "gemini",
+        openai_auth_mode: normalized.openai_auth_mode || normalized.auth_mode || "api_key",
+        openai_oauth_command: normalized.openai_oauth_command || normalized.codex_command || "",
+        model_name: normalized.model_name || normalized.model || "",
+        target_language: normalized.target_language || normalized.language || "ko",
+        translation_rule: normalized.translation_rule || normalized.translation_mode || "missing_only",
+        batch_size: normalizeNumericSetting(
+            normalized.batch_size ?? normalized.chunk_size,
+            getDefaultBatchSizeValue(normalized.provider || normalized.translation_provider || "gemini", normalized.openai_auth_mode || normalized.auth_mode || "api_key"),
+        ),
+        api_delay: normalizeNumericSetting(
+            normalized.api_delay ?? normalized.request_delay,
+            getDefaultApiDelayValue(normalized.provider || normalized.translation_provider || "gemini", normalized.openai_auth_mode || normalized.auth_mode || "api_key"),
+        ),
+        include_adult_content: Boolean(normalized.include_adult_content ?? normalized.include_adult ?? false),
+        game_path: normalized.game_path || normalized.game_exe_path || "",
+        world_settings: normalized.world_settings || normalized.default_world_settings || {},
+        publish_settings: sanitizeLegacyPublishSettings(
+            normalized.publish_settings || normalized.default_publish_settings || {},
+            targetLanguage,
+        ),
+        character_profiles: normalizeLoadedCharacterProfiles(normalized.character_profiles),
+        selected_files: Array.isArray(normalized.selected_files)
+            ? normalized.selected_files
+            : (Array.isArray(normalized.selected_file_paths) ? normalized.selected_file_paths : []),
+        analysis: (() => {
+            const analysisValue = normalized.analysis || normalized.analysis_snapshot || null;
+            return analysisValue && typeof analysisValue === "object" ? analysisValue : null;
+        })(),
+    };
+}
+
+
 function applyProfile(profile) {
+    profile = normalizeLoadedProfile(profile);
     const inferredPresetId = profile.translation_preset_id || inferTranslationPresetId({
         provider: profile.provider || "gemini",
         openaiAuthMode: profile.openai_auth_mode || "api_key",
@@ -3282,6 +3420,7 @@ function applyProfile(profile) {
     state.selectedFiles = Array.isArray(profile.selected_files)
         ? new Set(profile.selected_files)
         : new Set();
+    updateFileSelectionState();
     syncTranslationPresetSelection();
     renderTranslationHint();
     if (state.analysis) {
@@ -3298,13 +3437,25 @@ async function handleProfileLoad(event) {
     }
     try {
         const rawText = await file.text();
-        const profile = JSON.parse(rawText || "{}");
+        const profile = normalizeLoadedProfile(JSON.parse(rawText || "{}"));
         applyProfile(profile);
         addLog("프로필 JSON 불러오기 완료", "success");
 
         if (profile.game_path) {
             addLog("프로필의 게임 경로를 기준으로 분석을 다시 실행합니다.");
-            await analyzeGame();
+            try {
+                await analyzeGame({ raiseOnError: true, selectionMode: "preserve" });
+            } catch (analysisError) {
+                if (profile.analysis) {
+                    populateFromAnalysis(profile.analysis, "프로필 내장 분석 복원", { selectionMode: "preserve" });
+                    addLog(`분석 재실행 실패로 저장된 분석 데이터를 복원했습니다: ${analysisError.message}`, "warning");
+                } else {
+                    throw analysisError;
+                }
+            }
+        } else if (profile.analysis) {
+            populateFromAnalysis(profile.analysis, "프로필 내장 분석 복원", { selectionMode: "preserve" });
+            addLog("프로필에 포함된 분석 데이터를 복원했습니다.", "success");
         } else if (!state.analysis) {
             addLog("프로필은 불러왔지만 복원할 분석 데이터가 없어서 설정만 적용했습니다.", "warning");
         }
@@ -3383,6 +3534,8 @@ function handleFileSelection(event) {
     } else {
         state.selectedFiles.delete(filePath);
     }
+    updateFileSelectionState();
+    renderTranslationHint();
 }
 
 
@@ -3657,6 +3810,11 @@ async function prefillStartupPath() {
 function renderTranslationHint() {
     const rule = getTranslationRuleValue();
     const ruleLabel = getTranslationRuleLabel(rule);
+    const totalFileCount = state.analysis?.files?.length || 0;
+    const selectedFileCount = state.selectedFiles.size;
+    const selectionHint = totalFileCount
+        ? `선택 파일 ${selectedFileCount}/${totalFileCount}. `
+        : "";
     if (dom.translateButton) {
         if (rule === "retranslate_existing") {
             dom.translateButton.textContent = "선택 파일 재번역";
@@ -3674,10 +3832,10 @@ function renderTranslationHint() {
         ruleHint = "현재 범위의 줄을 전부 새 번역 대상으로 잡습니다. 기존 번역도 다시 씁니다.";
     }
     if (usesOpenAIOAuth()) {
-        dom.translationHint.textContent = `현재 규칙: ${ruleLabel}. ${ruleHint} OpenAI OAuth 모드에서는 배치 상한을 기준으로 더 싼 모델과 청크 크기를 자동 선택하고, 완료된 파일은 즉시 Ren'Py 출력 경로에 반영합니다.`;
+        dom.translationHint.textContent = `현재 규칙: ${ruleLabel}. ${selectionHint}${ruleHint} OpenAI OAuth 모드에서는 배치 상한을 기준으로 더 싼 모델과 청크 크기를 자동 선택하고, 완료된 파일은 즉시 Ren'Py 출력 경로에 반영합니다.`;
         return;
     }
-    dom.translationHint.textContent = `현재 규칙: ${ruleLabel}. ${ruleHint} Gemini/API 모드에서는 배치 상한과 글자수 budget을 함께 보고 긴 대사를 더 작은 청크로 자동 분할합니다.`;
+    dom.translationHint.textContent = `현재 규칙: ${ruleLabel}. ${selectionHint}${ruleHint} Gemini/API 모드에서는 배치 상한과 글자수 budget을 함께 보고 긴 대사를 더 작은 청크로 자동 분할합니다.`;
 }
 
 
@@ -3756,13 +3914,11 @@ function renderAdultQueue() {
 }
 
 
-function populateFromAnalysis(analysis, label) {
+function populateFromAnalysis(analysis, label, options = {}) {
     captureCurrentCharacterProfiles();
     state.analysis = analysis;
     clearTonePreview();
-    const availableFilePaths = (analysis.files || []).map((file) => file.file_relative_path);
-    const preservedSelection = availableFilePaths.filter((filePath) => state.selectedFiles.has(filePath));
-    state.selectedFiles = new Set(preservedSelection.length ? preservedSelection : availableFilePaths);
+    const availableFilePaths = applyAnalysisFileSelection(analysis, options);
     state.characterProfiles = {
         ...(analysis.default_character_profiles || {}),
         ...state.characterProfiles,

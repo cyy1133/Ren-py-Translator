@@ -6,6 +6,8 @@ import json
 import locale
 import os
 import re
+import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -96,6 +98,13 @@ GEMINI_COMPLEX_CHAR_LIMIT = 7200
 TRANSLATION_LOG_DIRNAME = "_translator_logs"
 UPLOADED_TRANSLATION_RUN_ROOT = APP_ROOT / "_translator_runs"
 TRANSLATION_TEMPERATURE = 0.3
+RENPY_CACHE_FILENAMES = {
+    "bytecode-27.rpyb",
+    "bytecode-39.rpyb",
+    "pyanalysis.rpyb",
+    "py3analysis.rpyb",
+    "screens.rpyb",
+}
 DEFAULT_BATCH_SIZE_BY_PROVIDER = {
     "gemini": 16,
     "openai": 12,
@@ -510,19 +519,28 @@ class TranslationOutputContext:
 
 def log_message(message: str, file_name: str = "General") -> None:
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{timestamp}][Backend][{file_name}] {message}")
+    print(f"[{timestamp}][Backend][{file_name}] {message}", flush=True)
 
 
 def find_game_directory(start_path: str) -> Optional[str]:
-    current_path = os.path.dirname(start_path)
-    for _ in range(4):
-        game_dir = os.path.join(current_path, "game")
-        if os.path.isdir(game_dir):
-            return game_dir
-        parent_path = os.path.dirname(current_path)
-        if parent_path == current_path:
-            break
-        current_path = parent_path
+    if not start_path:
+        return None
+
+    current_path = Path(start_path).expanduser()
+    try:
+        current_path = current_path.resolve()
+    except OSError:
+        current_path = current_path.absolute()
+
+    if current_path.is_file():
+        current_path = current_path.parent
+
+    for candidate in (current_path, *current_path.parents):
+        if candidate.name.lower() == "game" and candidate.is_dir():
+            return str(candidate)
+        game_dir = candidate / "game"
+        if game_dir.is_dir():
+            return str(game_dir)
     return None
 
 
@@ -584,11 +602,221 @@ def default_publish_language_code(target_language: str, analysis_mode: str) -> s
     return normalized
 
 
+def get_workbench_output_base(game_dir_path: Path) -> Path:
+    return game_dir_path.parent / "_translator_output"
+
+
+def get_translation_layer_stage_root(game_dir_path: Path, target_language: str) -> Path:
+    normalized = normalize_language_code(target_language)
+    return get_workbench_output_base(game_dir_path) / f"{normalized}_translation_layer"
+
+
+def get_source_stage_root(game_dir_path: Path, target_language: str) -> Path:
+    normalized = normalize_language_code(target_language)
+    return get_workbench_output_base(game_dir_path) / f"{normalized}_source"
+
+
+def get_legacy_translation_layer_stage_root(game_dir_path: Path, target_language: str) -> Path:
+    normalized = normalize_language_code(target_language)
+    return game_dir_path / "tl" / f"{normalized}_ai"
+
+
+def remove_tree_force(target_path: Path) -> None:
+    if not target_path.exists():
+        return
+
+    def _handle_remove_readonly(func, path, exc_info):  # type: ignore[no-untyped-def]
+        try:
+            os.chmod(path, stat.S_IWRITE)
+        except OSError:
+            pass
+        func(path)
+
+    shutil.rmtree(target_path, onerror=_handle_remove_readonly)
+
+
+def legacy_translation_layer_stage_needs_migration(legacy_root: Path, target_language: str) -> bool:
+    normalized_target = normalize_language_code(target_language)
+    header_pattern = re.compile(rf"^\s*translate\s+{re.escape(normalized_target)}\b", re.MULTILINE)
+    for candidate in legacy_root.rglob("*.rpy"):
+        try:
+            content = candidate.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if header_pattern.search(content):
+            return True
+    return False
+
+
+def migrate_legacy_translation_layer_stage_root(game_dir_path: Path, target_language: str) -> Dict[str, Any]:
+    legacy_root = get_legacy_translation_layer_stage_root(game_dir_path, target_language)
+    stage_root = get_translation_layer_stage_root(game_dir_path, target_language)
+    if not legacy_root.is_dir():
+        return {
+            "migrated": False,
+            "legacy_root": str(legacy_root),
+            "stage_root": str(stage_root),
+            "reason": "missing",
+        }
+    if not legacy_translation_layer_stage_needs_migration(legacy_root, target_language):
+        return {
+            "migrated": False,
+            "legacy_root": str(legacy_root),
+            "stage_root": str(stage_root),
+            "reason": "already_safe",
+        }
+
+    stage_root.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(legacy_root, stage_root, dirs_exist_ok=True)
+    remove_tree_force(legacy_root)
+    clear_renpy_cache_files(game_dir_path)
+    clear_translation_compiled_files(game_dir_path)
+    return {
+        "migrated": True,
+        "legacy_root": str(legacy_root),
+        "stage_root": str(stage_root),
+        "reason": "legacy_stage_conflict",
+    }
+
+
+def migrate_embedded_workbench_output_root(game_dir_path: Path) -> Dict[str, Any]:
+    embedded_root = game_dir_path / "_translator_output"
+    safe_root = get_workbench_output_base(game_dir_path)
+    if not embedded_root.is_dir():
+        return {
+            "migrated": False,
+            "embedded_root": str(embedded_root),
+            "safe_root": str(safe_root),
+            "reason": "missing",
+        }
+
+    safe_root.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(embedded_root, safe_root, dirs_exist_ok=True)
+    remove_tree_force(embedded_root)
+    clear_renpy_cache_files(game_dir_path)
+    clear_translation_compiled_files(game_dir_path)
+    return {
+        "migrated": True,
+        "embedded_root": str(embedded_root),
+        "safe_root": str(safe_root),
+        "reason": "embedded_stage_conflict",
+    }
+
+
+def migrate_nested_workbench_artifacts(game_dir_path: Path) -> Dict[str, Any]:
+    tl_root = game_dir_path / "tl"
+    safe_root = get_workbench_output_base(game_dir_path) / "_recovered_nested"
+    moved_paths: List[Dict[str, str]] = []
+
+    if not tl_root.is_dir():
+        return {
+            "migrated": False,
+            "safe_root": str(safe_root),
+            "moved_paths": moved_paths,
+            "reason": "missing_tl",
+        }
+
+    nested_dirs = sorted(
+        (
+            path
+            for path in tl_root.rglob("*")
+            if path.is_dir() and path.name in WORKBENCH_ARTIFACT_DIRNAMES
+        ),
+        key=lambda candidate: len(candidate.parts),
+    )
+    for nested_dir in nested_dirs:
+        if not nested_dir.exists():
+            continue
+        relative_key = "__".join(nested_dir.relative_to(tl_root).parts)
+        destination = safe_root / relative_key
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(nested_dir, destination, dirs_exist_ok=True)
+        remove_tree_force(nested_dir)
+        moved_paths.append(
+            {
+                "from": str(nested_dir),
+                "to": str(destination),
+            }
+        )
+
+    if moved_paths:
+        clear_renpy_cache_files(game_dir_path)
+        clear_translation_compiled_files(game_dir_path)
+
+    return {
+        "migrated": bool(moved_paths),
+        "safe_root": str(safe_root),
+        "moved_paths": moved_paths,
+        "reason": "nested_artifact_conflict" if moved_paths else "already_safe",
+    }
+
+
+def invalidate_compiled_translation_file(source_path: Path) -> Optional[str]:
+    if source_path.suffix.lower() != ".rpy":
+        return None
+    compiled_path = source_path.with_suffix(source_path.suffix + "c")
+    if not compiled_path.exists():
+        return None
+    try:
+        compiled_path.unlink()
+    except OSError:
+        return None
+    return str(compiled_path)
+
+
+def clear_renpy_cache_files(game_dir_path: Path) -> List[str]:
+    cache_dir = game_dir_path / "cache"
+    if not cache_dir.is_dir():
+        return []
+
+    removed_files: List[str] = []
+    for cache_name in sorted(RENPY_CACHE_FILENAMES):
+        cache_path = cache_dir / cache_name
+        if not cache_path.exists():
+            continue
+        try:
+            cache_path.unlink()
+            removed_files.append(str(cache_path))
+        except OSError:
+            continue
+    return removed_files
+
+
+def clear_translation_compiled_files(game_dir_path: Path) -> List[str]:
+    removed_files: List[str] = []
+    root_paths = [
+        game_dir_path / "tl",
+        game_dir_path / "_translator_output",
+        get_workbench_output_base(game_dir_path),
+    ]
+    for root_path in root_paths:
+        if not root_path.is_dir():
+            continue
+        for compiled_path in root_path.rglob("*.rpyc"):
+            try:
+                compiled_path.unlink()
+                removed_files.append(str(compiled_path))
+            except OSError:
+                continue
+    return removed_files
+
+
 def default_publish_display_name(language_code: str) -> str:
     normalized = normalize_language_code(language_code)
     if normalized.startswith("ko"):
-        return "한국어 (Workbench)"
-    return f"{normalized} (Workbench)"
+        return "한국어 (AI 번역)"
+    return f"{normalized} (AI Translation)"
+
+
+def normalize_publish_language_code(language_code: str, target_language: str, analysis_mode: str) -> str:
+    normalized = normalize_language_code(language_code)
+    if analysis_mode != "translation_layer":
+        return normalized
+
+    target_normalized = normalize_language_code(target_language)
+    if normalized == f"{target_normalized}_ai":
+        return default_publish_language_code(target_language, analysis_mode)
+    return normalized
 
 
 def parse_scalar_literal(raw_value: str) -> Any:
@@ -684,6 +912,16 @@ def build_public_font_reference(game_dir: Path, font_reference: str) -> str:
         return str(resolved.relative_to(game_dir)).replace("\\", "/")
     except ValueError:
         return str(resolved).replace("\\", "/")
+
+
+def build_public_path(game_dir: Path, path_value: Path) -> str:
+    normalized = path_value.resolve()
+    for base in (game_dir, game_dir.parent):
+        try:
+            return str(normalized.relative_to(base.resolve())).replace("\\", "/")
+        except ValueError:
+            continue
+    return str(normalized).replace("\\", "/")
 
 
 def measure_font_signature(font_path: Optional[Path], font_size: Optional[int]) -> Optional[Tuple[float, float]]:
@@ -1235,6 +1473,9 @@ def build_default_publish_settings(
 
 
 IGNORED_GAME_SCRIPT_PARTS = {"tl", "_translator_output", "_translator_logs"}
+WORKBENCH_ARTIFACT_DIRNAMES = {"_translator_output", "_translator_logs"}
+NON_TEMPLATE_SOURCE_FILES = {"auto.rpy", "gui.rpy", "label_log.rpy", "set_default_language_at_startup.rpy"}
+SYNTHETIC_TEMPLATE_FILES = {"common.rpy"}
 
 
 def is_primary_game_script(path: Path, game_dir: Path) -> bool:
@@ -1251,6 +1492,86 @@ def list_game_source_scripts(game_dir: Path) -> List[Path]:
         for path in sorted(game_dir.rglob("*.rpy"))
         if is_primary_game_script(path, game_dir)
     ]
+
+
+def list_translation_template_files(translation_root: Path) -> List[Path]:
+    if not translation_root.is_dir():
+        return []
+
+    template_files: List[Path] = []
+    for path in sorted(translation_root.rglob("*.rpy")):
+        try:
+            rel_parts = set(path.relative_to(translation_root).parts)
+        except ValueError:
+            continue
+        if rel_parts & WORKBENCH_ARTIFACT_DIRNAMES:
+            continue
+        template_files.append(path)
+    return template_files
+
+
+def remove_workbench_artifact_dirs(root_dir: Path) -> None:
+    if not root_dir.is_dir():
+        return
+
+    candidate_dirs = sorted(
+        (
+            path
+            for path in root_dir.rglob("*")
+            if path.is_dir() and path.name in WORKBENCH_ARTIFACT_DIRNAMES
+        ),
+        key=lambda path: len(path.parts),
+        reverse=True,
+    )
+    for directory in candidate_dirs:
+        shutil.rmtree(directory, ignore_errors=True)
+
+
+def build_template_generation_workspace(game_dir: Path) -> Tuple[Path, Path]:
+    temp_root = Path(tempfile.mkdtemp(prefix="renpy_template_workspace_"))
+    temp_game_dir = temp_root / "game"
+    temp_game_dir.mkdir(parents=True, exist_ok=True)
+
+    for source_path in list_game_source_scripts(game_dir):
+        destination_path = temp_game_dir / source_path.relative_to(game_dir)
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_path, destination_path)
+
+    return temp_root, temp_game_dir
+
+
+def copy_generated_templates_to_game(
+    temp_game_dir: Path,
+    game_dir: Path,
+    target_language: str,
+) -> List[Path]:
+    temp_translation_dir = temp_game_dir / "tl" / target_language
+    copied_paths: List[Path] = []
+    if not temp_translation_dir.is_dir():
+        return copied_paths
+
+    target_translation_dir = game_dir / "tl" / target_language
+    target_translation_dir.mkdir(parents=True, exist_ok=True)
+
+    for template_path in list_translation_template_files(temp_translation_dir):
+        relative_path = template_path.relative_to(temp_translation_dir)
+        destination_path = target_translation_dir / relative_path
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(template_path, destination_path)
+        copied_paths.append(destination_path)
+
+    remove_workbench_artifact_dirs(target_translation_dir)
+    return copied_paths
+
+
+def build_expected_template_relative_paths(game_dir: Path) -> Set[str]:
+    expected_paths = {
+        str(path.relative_to(game_dir)).replace("\\", "/")
+        for path in list_game_source_scripts(game_dir)
+        if path.name not in NON_TEMPLATE_SOURCE_FILES
+    }
+    expected_paths.update(SYNTHETIC_TEMPLATE_FILES)
+    return expected_paths
 
 
 def extract_gui_baseline(game_dir: Path) -> Dict[str, Any]:
@@ -1828,13 +2149,32 @@ def collect_character_portraits(
 
 
 def choose_scan_mode(game_dir: Path, target_language: str) -> Dict[str, Any]:
+    # 순환 번역 방지: _ai 또는 _workbench 언어는 소스로 사용할 수 없음
+    if target_language.endswith(("_ai", "_workbench")):
+        return {
+            "mode": "source_files",
+            "files": list_game_source_scripts(game_dir),
+            "language": target_language,
+        }
+
     translation_dir = game_dir / "tl" / target_language
     if translation_dir.is_dir():
-        translation_files = sorted(translation_dir.rglob("*.rpy"))
-        if translation_files:
+        # tl 폴더 내부에서도 _translator_output 등 잘못 생성된 하위 폴더 제외
+        all_candidates = sorted(translation_dir.rglob("*.rpy"))
+        filtered_files = []
+        for path in all_candidates:
+            try:
+                # game/tl/ko/ 하위 경로에서 금지된 키워드 확인
+                rel_parts = set(path.relative_to(translation_dir).parts)
+                if not (rel_parts & WORKBENCH_ARTIFACT_DIRNAMES):
+                    filtered_files.append(path)
+            except ValueError:
+                continue
+
+        if filtered_files:
             return {
                 "mode": "translation_layer",
-                "files": translation_files,
+                "files": filtered_files,
                 "language": target_language,
             }
 
@@ -2880,6 +3220,18 @@ def annotate_existing_translation_state(
     connected_lookup: Dict[str, Any] = {"by_item_id": {}, "by_match_key": {}}
     if game_dir:
         game_dir_path = Path(game_dir)
+        embedded_output_migration = migrate_embedded_workbench_output_root(game_dir_path)
+        if embedded_output_migration.get("migrated"):
+            log_message(
+                f"embedded workbench output moved outside game dir: {embedded_output_migration['embedded_root']} -> {embedded_output_migration['safe_root']}",
+                "Translation",
+            )
+        nested_artifact_migration = migrate_nested_workbench_artifacts(game_dir_path)
+        if nested_artifact_migration.get("migrated"):
+            log_message(
+                f"nested workbench artifacts recovered from tl folders: {len(nested_artifact_migration['moved_paths'])} path(s)",
+                "Translation",
+            )
         for overlay in collect_connected_translation_overlays(game_dir_path, target_language):
             overlay_lookup = load_existing_translation_lookup(
                 analyzed_files=analyzed_files,
@@ -2893,9 +3245,9 @@ def annotate_existing_translation_state(
             for match_key, payloads in (overlay_lookup.get("by_match_key") or {}).items():
                 connected_lookup["by_match_key"].setdefault(match_key, []).extend(payloads)
         if analysis_mode == "translation_layer":
-            workbench_root = game_dir_path / "tl" / f"{target_language}_ai"
+            workbench_root = get_translation_layer_stage_root(game_dir_path, target_language)
         elif analysis_mode == "source_files":
-            workbench_root = game_dir_path / "_translator_output" / f"{target_language}_source"
+            workbench_root = get_source_stage_root(game_dir_path, target_language)
 
     workbench_lookup = load_existing_translation_lookup(
         analyzed_files=analyzed_files,
@@ -3151,6 +3503,7 @@ def analyze_game_path(game_exe_path: str, target_language: str) -> Dict[str, Any
         raise FileNotFoundError("'game' 폴더를 찾지 못했습니다.")
 
     game_dir = Path(game_dir_str)
+    migrate_legacy_translation_layer_stage_root(game_dir, target_language)
     source_files = list_game_source_scripts(game_dir)
     character_registry = collect_character_definitions(source_files)
     collect_character_portraits(game_dir, source_files, character_registry)
@@ -3498,29 +3851,29 @@ def build_batch_prompts(
     system_prompt = (
         "You are a specialist translator for Ren'Py visual novel scripts.\n"
         "Translate source strings into natural Korean.\n"
-        "Return JSON only in the exact format {\"translations\":[{\"id\":\"...\",\"text\":\"...\"}]}.\n"
+        "Return JSON only in the format {\"translations\":[{\"i\":\"0\",\"t\":\"...\"}]}.\n"
+        "The 'i' field is the index provided in the request. The 't' field is the translated text.\n"
         "Preserve Ren'Py tags, variables, placeholders, escaped characters, tone, and speaker intent.\n"
         "Do not explain your reasoning. Do not omit any item."
     )
 
     payload_items = []
-    for item in item_batch:
+    for index, item in enumerate(item_batch):
         payload_items.append(
             {
-                "id": item.item_id,
-                "kind": item.kind,
-                "speaker_id": item.speaker_id,
-                "speaker_name": item.speaker_name,
-                "source_text": item.source_text,
+                "i": str(index),
+                "k": item.kind,
+                "sid": item.speaker_id,
+                "sn": item.speaker_name,
+                "s": item.source_text,
                 "adult": item.adult,
-                "adult_keywords": item.adult_keywords,
-                "context_before": item.context_before,
-                "context_after": item.context_after,
+                "cb": item.context_before,
+                "ca": item.context_after,
             }
         )
 
     user_sections = [
-        "Task: Translate every item into Korean while respecting the speaker/world guidance below.",
+        "Task: Translate every item into Korean. Keep the same 'i' index for each item.",
         f"Adult content in this batch is {'allowed' if include_adult_content else 'not expected'}.",
     ]
     if world_description:
@@ -3530,12 +3883,12 @@ def build_batch_prompts(
     if style_rules:
         user_sections.append(f"Formatting/style rules:\n{style_rules}")
     if protected_term_lines:
-        user_sections.append("Terms to keep as-is or transliterate carefully:\n" + "\n".join(protected_term_lines))
+        user_sections.append("Terms to keep as-is:\n" + "\n".join(protected_term_lines))
     if glossary_lines:
         user_sections.append("Glossary:\n" + "\n".join(glossary_lines))
     if character_guidance:
         user_sections.append("Character guidance:\n" + "\n".join(character_guidance))
-    user_sections.append("Items:\n" + json.dumps(payload_items, ensure_ascii=False, indent=2))
+    user_sections.append("Items:\n" + json.dumps(payload_items, ensure_ascii=False))
 
     return {
         "system_prompt": system_prompt,
@@ -4145,10 +4498,10 @@ def translate_with_codex_cli(
                 "items": {
                     "type": "object",
                     "properties": {
-                        "id": {"type": "string"},
-                        "text": {"type": "string"},
+                        "i": {"type": "string"},
+                        "t": {"type": "string"},
                     },
-                    "required": ["id", "text"],
+                    "required": ["i", "t"],
                     "additionalProperties": False,
                 },
             }
@@ -4759,14 +5112,19 @@ def translate_documents(
             if not isinstance(translations, list):
                 raise ValueError("번역 응답에 'translations' 리스트가 없습니다.")
 
+            # 인덱스(i)를 원래의 item_id로 복원하기 위한 맵 생성
+            id_map = {str(idx): item.item_id for idx, item in enumerate(working_batch)}
             batch_map: Dict[str, str] = {}
             for entry in translations:
                 if not isinstance(entry, dict):
                     continue
-                item_id = entry.get("id")
-                text = entry.get("text")
-                if item_id and isinstance(text, str):
-                    batch_map[item_id] = text
+                # 새로운 키 'i' (index)와 't' (text) 사용
+                raw_idx = entry.get("i")
+                text = entry.get("t")
+                if raw_idx is not None and isinstance(text, str):
+                    real_id = id_map.get(str(raw_idx))
+                    if real_id:
+                        batch_map[real_id] = text
 
             missing_items: List[TranslationItem] = []
             translated_count = 0
@@ -4802,18 +5160,26 @@ def translate_documents(
                     "missing_item_ids": [item.item_id for item in missing_items],
                 }
                 failed_batches.append(missing_record)
-                if len(missing_items) == 1:
-                    failed_items.append(
-                        {
-                            **missing_items[0].to_public_dict(),
-                            "error": "번역 응답에 해당 item id가 누락되었습니다.",
-                            "log_dir": str(attempt_dir) if attempt_dir else "",
-                        }
+                
+                # depth가 낮고(아직 너무 많이 쪼개지지 않음) 누락된 항목이 있으면 다시 시도
+                if depth < 3:
+                    log_message(
+                        f"누락된 항목 {len(missing_items)}개에 대해 재시도를 시작합니다. (depth={depth+1})",
+                        working_batch[0].file_relative_path if working_batch else "batch",
                     )
-                    persist_state("번역 응답에 일부 항목이 누락되었습니다.")
-                else:
                     for sub_batch in split_translation_batch(missing_items):
                         process_batch(sub_batch, document, chunk_strategy, depth + 1, f"missing_{attempt_index:04d}")
+                else:
+                    # 더 이상 재시도할 수 없는 경우 실패 목록에 저장
+                    for m_item in missing_items:
+                        failed_items.append(
+                            {
+                                **m_item.to_public_dict(),
+                                "error": "최대 재시도 횟수 초과 또는 번역 응답 누락",
+                                "log_dir": str(attempt_dir) if attempt_dir else "",
+                            }
+                        )
+                    persist_state(f"일부 항목({len(missing_items)}개)이 번역되지 않았습니다.")
                 return
 
             if api_delay and api_delay > 0 and not (provider == "openai" and openai_auth_mode == "oauth_cli"):
@@ -4975,7 +5341,11 @@ def normalize_publish_settings_payload(
     if enabled is not None:
         normalized["enabled"] = bool(enabled)
 
-    language_code = normalize_language_code(incoming.get("language_code") or normalized["language_code"])
+    language_code = normalize_publish_language_code(
+        incoming.get("language_code") or normalized["language_code"],
+        target_language=target_language,
+        analysis_mode=analysis_mode,
+    )
     normalized["language_code"] = language_code
     normalized["display_name"] = str(incoming.get("display_name") or normalized["display_name"] or "").strip() or default_publish_display_name(language_code)
     normalized["gui_language"] = str(incoming.get("gui_language") or normalized["gui_language"] or "").strip() or resolve_gui_language_default(
@@ -5028,6 +5398,13 @@ def build_translated_document_lines(
                 continue
             indentation = re.match(r"^\s*", line).group(0)
             output_lines[index] = f"{indentation}translate {publish_language_code} {header_match.group('label')}:"
+
+        for item in document.items:
+            if item.kind == "string" and item.item_id in translated_lookup:
+                old_idx = item.target_line_index - 1
+                if 0 <= old_idx < len(output_lines):
+                    old_indent = re.match(r"^\s*", output_lines[old_idx]).group(0)
+                    output_lines[old_idx] = f'{old_indent}old "{escape_renpy_text(item.source_text)}"'
 
     return {
         "output_lines": output_lines,
@@ -5234,10 +5611,28 @@ def prepare_translation_output_context(
     publish_settings: Optional[Dict[str, Any]] = None,
 ) -> TranslationOutputContext:
     game_dir_path = Path(game_dir)
+    embedded_output_migration = migrate_embedded_workbench_output_root(game_dir_path)
+    if embedded_output_migration.get("migrated"):
+        log_message(
+            f"embedded workbench output moved outside game dir: {embedded_output_migration['embedded_root']} -> {embedded_output_migration['safe_root']}",
+            "Translation",
+        )
+    nested_artifact_migration = migrate_nested_workbench_artifacts(game_dir_path)
+    if nested_artifact_migration.get("migrated"):
+        log_message(
+            f"nested workbench artifacts recovered from tl folders: {len(nested_artifact_migration['moved_paths'])} path(s)",
+            "Translation",
+        )
     if analysis_mode == "translation_layer":
-        output_root = game_dir_path / "tl" / f"{target_language}_ai"
+        migration_result = migrate_legacy_translation_layer_stage_root(game_dir_path, target_language)
+        if migration_result.get("migrated"):
+            log_message(
+                f"legacy tl staging moved to safe output root: {migration_result['legacy_root']} -> {migration_result['stage_root']}",
+                "Translation",
+            )
+        output_root = get_translation_layer_stage_root(game_dir_path, target_language)
     else:
-        output_root = game_dir_path / "_translator_output" / f"{target_language}_source"
+        output_root = get_source_stage_root(game_dir_path, target_language)
 
     output_root.mkdir(parents=True, exist_ok=True)
     gui_baseline = extract_gui_baseline(game_dir_path) if analysis_mode == "translation_layer" else {}
@@ -5321,6 +5716,7 @@ def write_document_result_to_disk(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text("\n".join(output_lines) + "\n", encoding="utf-8")
+    invalidate_compiled_translation_file(output_path)
 
     publish_relative_path = ""
     if output_context.publish_root is not None:
@@ -5338,12 +5734,13 @@ def write_document_result_to_disk(
         )
         publish_path.parent.mkdir(parents=True, exist_ok=True)
         publish_path.write_text("\n".join(publish_output["output_lines"]) + "\n", encoding="utf-8")
-        publish_relative_path = str(publish_path.relative_to(output_context.game_dir_path)).replace("\\", "/")
+        invalidate_compiled_translation_file(publish_path)
+        publish_relative_path = build_public_path(output_context.game_dir_path, publish_path)
 
     return {
         "original_filename": document.file_name,
         "file_relative_path": document.file_relative_path,
-        "output_relative_path": str(output_path.relative_to(output_context.game_dir_path)).replace("\\", "/"),
+        "output_relative_path": build_public_path(output_context.game_dir_path, output_path),
         "publish_relative_path": publish_relative_path,
         "translated_content": "\n".join(output_lines) + "\n",
         "translated_count": translated_count,
@@ -5371,6 +5768,7 @@ def sync_translation_support_files(
     if output_context.publish_root is not None and output_context.publish_plan is not None:
         config_path = output_context.publish_root / "zz_workbench_language_config.rpy"
         config_path.write_text(build_publish_config_content(output_context.publish_plan), encoding="utf-8")
+        invalidate_compiled_translation_file(config_path)
 
         manifest_path = output_context.publish_root / "zz_workbench_publish_manifest.json"
         manifest_payload = {
@@ -5396,14 +5794,30 @@ def sync_translation_support_files(
         )
         publish_bundle.update(
             {
-                "config_path": str(config_path.relative_to(output_context.game_dir_path)).replace("\\", "/"),
-                "manifest_path": str(manifest_path.relative_to(output_context.game_dir_path)).replace("\\", "/"),
-                "notes_path": str(notes_path.relative_to(output_context.game_dir_path)).replace("\\", "/"),
+                "config_path": build_public_path(output_context.game_dir_path, config_path),
+                "manifest_path": build_public_path(output_context.game_dir_path, manifest_path),
+                "notes_path": build_public_path(output_context.game_dir_path, notes_path),
             }
         )
 
+    cache_cleanup_files: List[str] = []
+    compiled_cleanup_files: List[str] = []
+    if output_context.analysis_mode == "translation_layer":
+        cache_cleanup_files = clear_renpy_cache_files(output_context.game_dir_path)
+        compiled_cleanup_files = clear_translation_compiled_files(output_context.game_dir_path)
+    if cache_cleanup_files:
+        publish_bundle["cache_cleanup_files"] = [
+            build_public_path(output_context.game_dir_path, Path(cache_path))
+            for cache_path in cache_cleanup_files
+        ]
+    if compiled_cleanup_files:
+        publish_bundle["compiled_cleanup_files"] = [
+            build_public_path(output_context.game_dir_path, Path(cache_path))
+            for cache_path in compiled_cleanup_files
+        ]
+
     return {
-        "adult_review_path": str(adult_review_path.relative_to(output_context.game_dir_path)).replace("\\", "/"),
+        "adult_review_path": build_public_path(output_context.game_dir_path, adult_review_path),
         "publish_bundle": publish_bundle,
     }
 
@@ -5468,9 +5882,15 @@ def build_document_editor_payload(
     output_relative_path = ""
     publish_relative_path = ""
     if output_context is not None:
-        output_relative_path = str((output_context.output_root / Path(document.output_relative_path)).relative_to(output_context.game_dir_path)).replace("\\", "/")
+        output_relative_path = build_public_path(
+            output_context.game_dir_path,
+            output_context.output_root / Path(document.output_relative_path),
+        )
         if output_context.publish_root is not None:
-            publish_relative_path = str((output_context.publish_root / Path(document.output_relative_path)).relative_to(output_context.game_dir_path)).replace("\\", "/")
+            publish_relative_path = build_public_path(
+                output_context.game_dir_path,
+                output_context.publish_root / Path(document.output_relative_path),
+            )
 
     items_payload: List[Dict[str, Any]] = []
     for item in document.items:
@@ -5582,7 +6002,7 @@ def generate_template() -> Any:
 
     game_dir = Path(game_dir_str)
     # SDK가 설치되어 있는지 확인
-    sdk_dir = current_dir / "renpy_sdk"
+    sdk_dir = APP_ROOT / "renpy_sdk"
     sdk_exe_paths = list(sdk_dir.glob("renpy-*-sdk/renpy.exe"))
     
     if not sdk_dir.is_dir() or not sdk_exe_paths:
@@ -5592,23 +6012,39 @@ def generate_template() -> Any:
     sdk_exe = str(sdk_exe_paths[0])
     
     tl_dir = game_dir / "tl" / target_language
+    remove_workbench_artifact_dirs(tl_dir)
+    existing_template_files = list_translation_template_files(tl_dir)
+    expected_template_paths = build_expected_template_relative_paths(game_dir)
+    existing_template_paths = (
+        {
+            str(path.relative_to(tl_dir)).replace("\\", "/")
+            for path in existing_template_files
+        }
+        if tl_dir.is_dir()
+        else set()
+    )
+    missing_template_paths = expected_template_paths - existing_template_paths
 
     # 캐시 확인: 이미 템플릿 파일(.rpy)이 하나라도 있다면 추출 생략
-    if tl_dir.is_dir() and any(tl_dir.glob("*.rpy")):
+    if existing_template_files and not missing_template_paths:
         log_message(f"[{target_language}] 언어 폴더에 이미 번역 템플릿 파일이 존재합니다 (캐시 활용).")
         return jsonify({"status": "cached", "message": "이미 번역 템플릿이 존재하여 추출을 건너뛰었습니다."}), 200
+    if missing_template_paths:
+        log_message(f"[{target_language}] 템플릿 누락 {len(missing_template_paths)}개를 감지하여 재생성합니다.")
 
     log_message(f"[{target_language}] 번역 템플릿 생성을 시작합니다...")
-    # Ren'Py 엔진으로 템플릿 추출 명령 실행
-    # 명령어: [game_exe_path] [game_dir] translate [target_language]
-    cmd = [sdk_exe, game_dir_str, "translate", target_language]
+    temp_root: Optional[Path] = None
+    temp_game_dir: Optional[Path] = None
     
     try:
+        temp_root, temp_game_dir = build_template_generation_workspace(game_dir)
+        cmd = [sdk_exe, str(temp_game_dir), "translate", target_language]
         # 백그라운드 서버 블로킹 방지를 위해 적절한 타임아웃(예: 300초) 설정 및 인코딩 방어
         result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
+        copied_files = copy_generated_templates_to_game(temp_game_dir, game_dir, target_language)
         
         # 엔진 출력에 따른 리턴코드가 1이어도 실제 파일은 정상 생성되는 경우가 있으므로 파일 우선 확인
-        if tl_dir.is_dir() and any(tl_dir.glob("*.rpy")):
+        if copied_files:
             log_message(f"[{target_language}] 번역 템플릿 생성 완료.")
             return jsonify({"status": "success", "message": "번역 템플릿 추출이 완료되었습니다."}), 200
         else:
@@ -5626,7 +6062,9 @@ def generate_template() -> Any:
                 return jsonify({"error": f"엔진 추출 중 파일이 생성되지 않았으며 오류가 발생했습니다:\n{safe_err}"}), 500
     except subprocess.TimeoutExpired:
         # 시간 초과 시에도 파일이 일부/전부 생성되었을 수 있으므로 확인
-        if tl_dir.is_dir() and any(tl_dir.glob("*.rpy")):
+        if temp_game_dir is not None:
+            copy_generated_templates_to_game(temp_game_dir, game_dir, target_language)
+        if list_translation_template_files(tl_dir):
             log_message(f"[{target_language}] 타임아웃이 발생했으나 템플릿 파일은 생성되어 무시합니다.")
             return jsonify({"status": "success", "message": "과정이 오래 걸렸으나 번역 템플릿 추출은 일부/전부 완료되었습니다."}), 200
         else:    
@@ -5636,6 +6074,9 @@ def generate_template() -> Any:
         safe_e = str(e).encode('ascii', 'replace').decode('ascii')
         log_message(f"템플릿 추출 중 예외 발생: {safe_e}")
         return jsonify({"error": f"템플릿 추출 중 오류: {safe_e}"}), 500
+    finally:
+        if temp_root is not None:
+            shutil.rmtree(temp_root, ignore_errors=True)
 
 
 @app.route("/download_renpy_sdk", methods=["POST"])
@@ -5647,8 +6088,8 @@ def download_renpy_sdk():
     import zipfile
     import tempfile
     import shutil
-    
-    sdk_dir = current_dir / "renpy_sdk"
+
+    sdk_dir = APP_ROOT / "renpy_sdk"
     sdk_url = "https://www.renpy.org/dl/8.3.4/renpy-8.3.4-sdk.zip"
     
     # 이미 설치되어 있는지 확인
@@ -6222,7 +6663,7 @@ def search_dialogue():
 
         game_dir = Path(game_dir_str)
         tl_root = game_dir / "tl"
-        source_root = game_dir / "_translator_output" / "ko_source"
+        source_root = get_source_stage_root(game_dir, "ko")
 
         query_lower = query.lower()
         results = []
