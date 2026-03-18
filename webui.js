@@ -166,6 +166,9 @@ const state = {
     selectedTranslationPresetId: DEFAULT_TRANSLATION_PRESET_ID,
     tonePreviewByCharacter: {},
     tonePreviewLoadingSpeakerId: null,
+    selectedIssueCandidateIds: new Set(),
+    selectedAdultQueueIds: new Set(),
+    issueCandidateSearchQuery: "",
     editorDocument: null,
     editorFilePath: "",
     editorSelectedItemId: null,
@@ -251,6 +254,7 @@ const dom = {
     pickExeButton: document.getElementById("pickExeButton"),
     generateTemplateButton: document.getElementById("generateTemplateButton"),
     analyzeGameButton: document.getElementById("analyzeGameButton"),
+    repairOutputsButton: document.getElementById("repairOutputsButton"),
     uploadInput: document.getElementById("uploadInput"),
     uploadList: document.getElementById("uploadList"),
     analyzeUploadsButton: document.getElementById("analyzeUploadsButton"),
@@ -298,6 +302,16 @@ const dom = {
     addStyleOverrideRowButton: document.getElementById("addStyleOverrideRowButton"),
     fontSuggestionList: document.getElementById("fontSuggestionList"),
     styleSuggestionList: document.getElementById("styleSuggestionList"),
+    issueCandidateSearchInput: document.getElementById("issueCandidateSearchInput"),
+    selectVisibleIssueCandidatesButton: document.getElementById("selectVisibleIssueCandidatesButton"),
+    clearIssueCandidateSelectionButton: document.getElementById("clearIssueCandidateSelectionButton"),
+    retranslateIssueCandidatesButton: document.getElementById("retranslateIssueCandidatesButton"),
+    issueCandidateSummary: document.getElementById("issueCandidateSummary"),
+    issueCandidateQueue: document.getElementById("issueCandidateQueue"),
+    adultQueueSummary: document.getElementById("adultQueueSummary"),
+    selectVisibleAdultQueueButton: document.getElementById("selectVisibleAdultQueueButton"),
+    clearAdultQueueSelectionButton: document.getElementById("clearAdultQueueSelectionButton"),
+    translateAdultQueueButton: document.getElementById("translateAdultQueueButton"),
     adultQueue: document.getElementById("adultQueue"),
     editorFileSelect: document.getElementById("editorFileSelect"),
     editorStatusFilter: document.getElementById("editorStatusFilter"),
@@ -1865,6 +1879,67 @@ function getEditableDisplayText(item) {
 }
 
 
+function getIssueCandidates() {
+    const allCandidates = state.analysis?.issue_candidates || [];
+    if (!state.selectedFiles.size) {
+        return allCandidates;
+    }
+    return allCandidates.filter((item) => state.selectedFiles.has(item.file_relative_path));
+}
+
+
+function getAdultQueueItems() {
+    const allItems = state.analysis?.adult_queue || [];
+    if (!state.selectedFiles.size) {
+        return allItems;
+    }
+    return allItems.filter((item) => state.selectedFiles.has(item.file_relative_path));
+}
+
+
+function syncIssueCandidateSelection(candidates = getIssueCandidates()) {
+    const availableIds = new Set((candidates || []).map((item) => item.item_id));
+    state.selectedIssueCandidateIds = new Set(
+        Array.from(state.selectedIssueCandidateIds).filter((itemId) => availableIds.has(itemId)),
+    );
+}
+
+
+function syncAdultQueueSelection(items = getAdultQueueItems()) {
+    const availableIds = new Set((items || []).map((item) => item.item_id));
+    state.selectedAdultQueueIds = new Set(
+        Array.from(state.selectedAdultQueueIds).filter((itemId) => availableIds.has(itemId)),
+    );
+}
+
+
+function getVisibleIssueCandidates() {
+    const query = (state.issueCandidateSearchQuery || "").trim().toLowerCase();
+    const candidates = getIssueCandidates();
+    if (!query) {
+        return candidates;
+    }
+    return candidates.filter((item) => {
+        const haystack = [
+            item.speaker_name,
+            item.speaker_id,
+            item.file_relative_path,
+            item.source_text,
+            item.issue_reason,
+            item.translation_status,
+        ]
+            .map((value) => String(value || "").toLowerCase())
+            .join(" ");
+        return haystack.includes(query);
+    });
+}
+
+
+function getIssueReasonLabel(item) {
+    return item?.issue_reason || "번역 누락 의심";
+}
+
+
 function buildManualEditPayload(edits) {
     if (!state.analysis) {
         throw new Error("먼저 게임 분석을 실행하세요.");
@@ -2220,6 +2295,9 @@ async function saveManualEdits(
 function buildTranslationScopeLabel(payload) {
     const scope = payload.translation_scope || {};
     const ruleLabel = getTranslationRuleLabel(scope.translation_rule || payload.translation_rule || getTranslationRuleValue());
+    if (scope.mode === "selected_items") {
+        return `${ruleLabel} · items=${scope.selected_item_count || scope.selected_item_ids?.length || 0}`;
+    }
     if (scope.mode === "selected_speakers") {
         return `${ruleLabel} · speaker=${scope.selected_speaker_names?.join(", ") || scope.selected_speaker_ids?.join(", ") || "-"}`;
     }
@@ -2640,7 +2718,169 @@ function renderCharacterGrid(viewState = null) {
 }
 
 
+function renderIssueCandidates() {
+    if (!dom.issueCandidateQueue || !dom.issueCandidateSummary) {
+        return;
+    }
+    if (!state.analysis) {
+        dom.issueCandidateSummary.textContent = "게임 분석 후 문제 후보를 여기서 검토할 수 있습니다.";
+        dom.issueCandidateQueue.className = "adult-queue empty-state";
+        dom.issueCandidateQueue.textContent = "분석 후 문제 후보가 여기에 표시됩니다.";
+        dom.selectVisibleIssueCandidatesButton.disabled = true;
+        dom.clearIssueCandidateSelectionButton.disabled = true;
+        dom.retranslateIssueCandidatesButton.disabled = true;
+        return;
+    }
+
+    const allCandidates = getIssueCandidates();
+    syncIssueCandidateSelection(allCandidates);
+    const visibleCandidates = getVisibleIssueCandidates();
+    const selectedVisibleCount = visibleCandidates.filter((item) => state.selectedIssueCandidateIds.has(item.item_id)).length;
+
+    dom.issueCandidateSummary.textContent = allCandidates.length
+        ? `현재 선택 파일 기준 후보 ${visibleCandidates.length}/${allCandidates.length}줄 · 선택 ${state.selectedIssueCandidateIds.size}줄 · 체크한 줄만 다시 번역할 수 있습니다.`
+        : "현재 선택된 파일 범위에서는 미번역 / 원문 유지 의심 후보가 없습니다.";
+    dom.selectVisibleIssueCandidatesButton.disabled = !visibleCandidates.length;
+    dom.clearIssueCandidateSelectionButton.disabled = !state.selectedIssueCandidateIds.size;
+    dom.retranslateIssueCandidatesButton.disabled = !state.selectedIssueCandidateIds.size;
+
+    if (!allCandidates.length) {
+        dom.issueCandidateQueue.className = "adult-queue empty-state";
+        dom.issueCandidateQueue.textContent = "현재 선택된 파일 범위에서는 문제 후보가 없습니다.";
+        return;
+    }
+    if (!visibleCandidates.length) {
+        dom.issueCandidateQueue.className = "adult-queue empty-state";
+        dom.issueCandidateQueue.textContent = "검색 조건에 맞는 문제 후보가 없습니다.";
+        return;
+    }
+
+    dom.issueCandidateQueue.className = "adult-queue";
+    dom.issueCandidateQueue.innerHTML = visibleCandidates.map((item) => {
+        const checked = state.selectedIssueCandidateIds.has(item.item_id) ? "checked" : "";
+        const selectedClass = checked ? " is-selected" : "";
+        return `
+            <article class="manual-edit-card issue-candidate-card${selectedClass}">
+                <div class="dialogue-row-header">
+                    <label class="issue-candidate-toggle">
+                        <input type="checkbox" data-role="issue-select" data-item-id="${escapeHtml(item.item_id)}" ${checked}>
+                        <span>
+                            <strong>${escapeHtml(item.speaker_name || item.speaker_id || "Narration")}</strong>
+                            <span class="helper-text">${escapeHtml(item.file_relative_path)}:${escapeHtml(item.line_number)}</span>
+                        </span>
+                    </label>
+                    <div class="pill-list compact">
+                        <span class="pill subtle">${escapeHtml(getIssueReasonLabel(item))}</span>
+                        <span class="pill subtle">score ${escapeHtml(item.issue_score || 0)}</span>
+                        <span class="pill subtle">${escapeHtml(getTranslationStatusLabel(item.translation_status, item.translation_source))}</span>
+                    </div>
+                </div>
+                <div class="editor-source-box">
+                    <strong>원문</strong>
+                    <p>${escapeHtml(item.source_text)}</p>
+                </div>
+                ${buildTranslationPreviewLines(item)}
+                <div class="editor-context-grid">
+                    <div class="editor-source-box">
+                        <strong>이전 문맥</strong>
+                        <p>${escapeHtml((item.context_before || []).join("\n") || "없음")}</p>
+                    </div>
+                    <div class="editor-source-box">
+                        <strong>다음 문맥</strong>
+                        <p>${escapeHtml((item.context_after || []).join("\n") || "없음")}</p>
+                    </div>
+                </div>
+                <div class="manual-edit-actions">
+                    <button type="button" class="ghost-button mini-button" data-action="open-issue-in-editor" data-file-path="${escapeHtml(item.file_relative_path)}" data-item-id="${escapeHtml(item.item_id)}">편집 탭에서 열기</button>
+                    <button type="button" class="secondary-button mini-button" data-action="retranslate-issue-item" data-item-id="${escapeHtml(item.item_id)}">이 줄만 재번역</button>
+                </div>
+            </article>
+        `;
+    }).join("");
+
+    if (selectedVisibleCount && !state.selectedIssueCandidateIds.size) {
+        dom.retranslateIssueCandidatesButton.disabled = true;
+    }
+}
+
+
 function renderAdultQueue() {
+    if (!dom.adultQueue || !dom.adultQueueSummary) {
+        return;
+    }
+    if (!state.analysis) {
+        dom.adultQueueSummary.textContent = "현재 선택 파일 범위에서 성인 대사를 확인할 수 있습니다.";
+        dom.adultQueue.className = "adult-queue empty-state";
+        dom.adultQueue.textContent = "성인 큐가 아직 없습니다.";
+        dom.selectVisibleAdultQueueButton.disabled = true;
+        dom.clearAdultQueueSelectionButton.disabled = true;
+        dom.translateAdultQueueButton.disabled = true;
+        return;
+    }
+
+    const filteredQueue = getAdultQueueItems();
+    syncAdultQueueSelection(filteredQueue);
+    dom.adultQueueSummary.textContent = filteredQueue.length
+        ? `현재 선택 파일 기준 성인 대사 ${filteredQueue.length}개 중 ${state.selectedAdultQueueIds.size}개 선택됨. 선택 항목만 자동번역할 수 있습니다.`
+        : "현재 선택 파일 범위에서 성인 큐 항목이 없습니다.";
+    dom.selectVisibleAdultQueueButton.disabled = !filteredQueue.length;
+    dom.clearAdultQueueSelectionButton.disabled = !state.selectedAdultQueueIds.size;
+    dom.translateAdultQueueButton.disabled = !state.selectedAdultQueueIds.size;
+
+    if (!filteredQueue.length) {
+        dom.adultQueue.className = "adult-queue empty-state";
+        dom.adultQueue.textContent = "현재 선택 파일 범위에서 성인 큐 항목이 없습니다.";
+        return;
+    }
+
+    dom.adultQueue.className = "adult-queue";
+    dom.adultQueue.innerHTML = filteredQueue.map((item) => {
+        const draftValue = getEditorDraftValue(item);
+        const isDirty = draftValue.trim() !== getEditableDisplayText(item).trim();
+        const checked = state.selectedAdultQueueIds.has(item.item_id) ? "checked" : "";
+        const selectedClass = checked ? " is-selected" : "";
+        return `
+            <article class="manual-edit-card issue-candidate-card${selectedClass}${isDirty ? " is-dirty" : ""}">
+                <div class="dialogue-row-header">
+                    <label class="issue-candidate-toggle">
+                        <input type="checkbox" data-role="adult-select" data-item-id="${escapeHtml(item.item_id)}" ${checked}>
+                        <span>
+                            <strong>${escapeHtml(item.speaker_name || item.speaker_id || "Narration")}</strong>
+                            <span class="helper-text">${escapeHtml(item.file_relative_path)}:${escapeHtml(item.line_number)} · ${escapeHtml(getTranslationStatusLabel(item.translation_status, item.translation_source))}</span>
+                        </span>
+                    </label>
+                    <div class="pill-list compact">
+                        <span class="pill subtle">${escapeHtml((item.adult_keywords || []).join(", ") || "adult queue")}</span>
+                    </div>
+                </div>
+                <div class="editor-source-box">
+                    <strong>원문</strong>
+                    <p>${escapeHtml(item.source_text)}</p>
+                </div>
+                ${buildTranslationPreviewLines(item)}
+                <label class="field">
+                    <span>직접 번역</span>
+                    <textarea data-role="adult-text" data-item-id="${escapeHtml(item.item_id)}" rows="6" placeholder="이 줄을 직접 번역하면 바로 게임 출력에 반영됩니다.">${escapeHtml(draftValue)}</textarea>
+                </label>
+                <div class="editor-context-grid">
+                    <div class="editor-source-box">
+                        <strong>이전 문맥</strong>
+                        <p>${escapeHtml((item.context_before || []).join("\n") || "없음")}</p>
+                    </div>
+                    <div class="editor-source-box">
+                        <strong>다음 문맥</strong>
+                        <p>${escapeHtml((item.context_after || []).join("\n") || "없음")}</p>
+                    </div>
+                </div>
+                <div class="manual-edit-actions">
+                    <button type="button" class="ghost-button mini-button" data-action="open-adult-in-editor" data-file-path="${escapeHtml(item.file_relative_path)}" data-item-id="${escapeHtml(item.item_id)}">편집 탭에서 열기</button>
+                    <button type="button" class="secondary-button mini-button" data-action="save-adult-item" data-file-path="${escapeHtml(item.file_relative_path)}" data-item-id="${escapeHtml(item.item_id)}">이 줄 저장</button>
+                </div>
+            </article>
+        `;
+    }).join("");
+    return;
+
     const queue = state.analysis?.adult_queue || [];
     if (!queue.length) {
         dom.adultQueue.className = "adult-queue empty-state";
@@ -2700,10 +2940,16 @@ function renderResults(payload = { results: [] }) {
         const scope = payload.translation_scope;
         const info = document.createElement("div");
         info.className = "result-row";
+        const scopeLabel = scope.mode === "selected_items"
+            ? "선택 문제 후보 범위"
+            : (scope.mode === "selected_speakers" ? "선택 캐릭터 범위" : "전체 항목 범위");
+        const scopeDetail = scope.mode === "selected_items"
+            ? `${scope.selected_item_count || scope.selected_item_ids?.length || 0}개 항목`
+            : ((scope.selected_speaker_names || scope.selected_speaker_ids || []).join(", ") || "전체 화자");
         info.innerHTML = `
             <div><strong>번역 범위</strong></div>
-            <div class="helper-text">${escapeHtml(scope.mode === "selected_speakers" ? "선택 캐릭터 범위" : "전체 항목 범위")} · ${escapeHtml(getTranslationRuleLabel(scope.translation_rule || "missing_only"))}</div>
-            <div class="helper-text">${escapeHtml((scope.selected_speaker_names || scope.selected_speaker_ids || []).join(", ") || "전체 화자")}</div>
+            <div class="helper-text">${escapeHtml(scopeLabel)} · ${escapeHtml(getTranslationRuleLabel(scope.translation_rule || "missing_only"))}</div>
+            <div class="helper-text">${escapeHtml(scopeDetail)}</div>
         `;
         dom.resultsPanel.appendChild(info);
     }
@@ -2960,6 +3206,44 @@ async function analyzeGame(options = {}) {
 }
 
 
+async function repairTranslationOutputs() {
+    const gamePath = dom.gamePathInput.value.trim();
+    if (!gamePath) {
+        addLog("게임 경로가 비어 있습니다.", "error");
+        return;
+    }
+
+    dom.repairOutputsButton.disabled = true;
+    const originalText = dom.repairOutputsButton.textContent;
+    dom.repairOutputsButton.textContent = "복구 중...";
+    addLog(`출력 검증/복구 요청: ${gamePath}`, "info");
+
+    try {
+        const response = await apiPost("/repair_translation_outputs", {
+            game_exe_path: gamePath,
+            target_language: dom.targetLanguageInput.value.trim() || "ko",
+            publish_settings: collectPublishSettings(),
+        });
+        const repairedCount = Number(response.repaired_outputs?.changed_paths?.length || 0);
+        const cacheCount = Number(response.cache_cleanup_count || 0);
+        const compiledCount = Number(response.compiled_cleanup_count || 0);
+        addLog(
+            `출력 검증/복구 완료: repaired=${repairedCount}, cache=${cacheCount}, compiled=${compiledCount}`,
+            repairedCount > 0 ? "success" : "info",
+        );
+        if (response.nested_artifact_migration?.moved_paths?.length) {
+            addLog(`중첩된 워크벤치 산출물 ${response.nested_artifact_migration.moved_paths.length}개를 회수했습니다.`, "warning");
+        }
+        await analyzeGame({ selectionMode: "preserve" });
+    } catch (error) {
+        addLog(`출력 검증/복구 실패: ${error.message}`, "error");
+    } finally {
+        dom.repairOutputsButton.disabled = false;
+        dom.repairOutputsButton.textContent = originalText;
+    }
+}
+
+
 async function pickExeAndAnalyze() {
     dom.pickExeButton.disabled = true;
     addLog("EXE 선택창 요청");
@@ -3172,7 +3456,7 @@ function buildTranslationPayload(options = {}) {
         translation_rule: options.translationRule || getTranslationRuleValue(),
         batch_size: Number(dom.batchSizeInput.value || getDefaultBatchSizeValue()),
         api_delay: Number(dom.apiDelayInput.value || getDefaultApiDelayValue()),
-        include_adult_content: dom.includeAdultCheckbox.checked,
+        include_adult_content: options.includeAdultContent ?? dom.includeAdultCheckbox.checked,
         selected_files: Array.from(state.selectedFiles),
         character_profiles: collectCharacterProfiles(),
         world_settings: collectWorldSettings(),
@@ -3181,7 +3465,21 @@ function buildTranslationPayload(options = {}) {
     const selectedSpeakerIds = Array.isArray(options.selectedSpeakerIds)
         ? options.selectedSpeakerIds.map((value) => String(value || "").trim()).filter(Boolean)
         : [];
-    if (selectedSpeakerIds.length) {
+    const selectedItemIds = Array.isArray(options.selectedItemIds)
+        ? options.selectedItemIds.map((value) => String(value || "").trim()).filter(Boolean)
+        : [];
+    if (selectedItemIds.length) {
+        payload.selected_item_ids = selectedItemIds;
+        payload.force_retranslate = options.forceRetranslate !== false;
+        payload.translation_scope = {
+            mode: "selected_items",
+            selected_speaker_ids: [],
+            selected_speaker_names: [],
+            selected_item_ids: selectedItemIds,
+            selected_item_count: selectedItemIds.length,
+            translation_rule: payload.translation_rule,
+        };
+    } else if (selectedSpeakerIds.length) {
         const selectedSpeakerNames = selectedSpeakerIds
             .map((speakerId) => {
                 const character = getCharacterBySpeakerId(speakerId);
@@ -3263,7 +3561,15 @@ async function translateSelection(options = {}) {
         } else if (response.publish_bundle?.reason) {
             addLog(`Ren'Py publish bundle: ${response.publish_bundle.reason}`, "warning");
         }
-        activateTab("results");
+        if (options.refreshAnalysisAfterSuccess && state.analysis) {
+            try {
+                const analysis = await apiPost("/analyze_sources", buildCurrentAnalysisPayload());
+                populateFromAnalysis(analysis, "재번역 반영", { selectionMode: "preserve" });
+            } catch (refreshError) {
+                addLog(`재분석 실패: ${refreshError.message}`, "warning");
+            }
+        }
+        activateTab(options.activateTabName || "results");
     } catch (error) {
         addLog(`번역 실패: ${error.message}`, "error");
         activateTab("results");
@@ -3289,6 +3595,49 @@ async function retranslateSelectedCharacter(speakerId = state.selectedCharacterI
         selectedSpeakerIds: [speakerId],
         translationRule: "retranslate_existing",
         forceRetranslate: true,
+    });
+}
+
+
+async function retranslateIssueCandidates(itemIds = Array.from(state.selectedIssueCandidateIds)) {
+    const normalizedIds = itemIds.map((value) => String(value || "").trim()).filter(Boolean);
+    if (!normalizedIds.length) {
+        addLog("재번역할 문제 후보를 먼저 선택하세요.", "warning");
+        return;
+    }
+    if (dom.translateButton.disabled) {
+        addLog("다른 번역 작업이 진행 중입니다.", "warning");
+        return;
+    }
+    addLog(`문제 후보 재번역 요청: ${normalizedIds.length}개 항목`, "info");
+    await translateSelection({
+        selectedItemIds: normalizedIds,
+        translationRule: "force_all",
+        forceRetranslate: true,
+        refreshAnalysisAfterSuccess: true,
+        activateTabName: "issues",
+    });
+}
+
+
+async function translateSelectedAdultQueue(itemIds = Array.from(state.selectedAdultQueueIds)) {
+    const normalizedIds = itemIds.map((value) => String(value || "").trim()).filter(Boolean);
+    if (!normalizedIds.length) {
+        addLog("자동번역할 성인 대사를 먼저 선택하세요.", "warning");
+        return;
+    }
+    if (dom.translateButton.disabled) {
+        addLog("다른 번역 작업이 진행 중입니다.", "warning");
+        return;
+    }
+    addLog(`성인 큐 자동번역 요청: ${normalizedIds.length}개 항목`, "info");
+    await translateSelection({
+        selectedItemIds: normalizedIds,
+        includeAdultContent: true,
+        translationRule: "force_all",
+        forceRetranslate: true,
+        refreshAnalysisAfterSuccess: true,
+        activateTabName: "adult",
     });
 }
 
@@ -3536,6 +3885,8 @@ function handleFileSelection(event) {
     }
     updateFileSelectionState();
     renderTranslationHint();
+    renderIssueCandidates();
+    renderAdultQueue();
 }
 
 
@@ -3929,6 +4280,8 @@ function populateFromAnalysis(analysis, label, options = {}) {
     state.selectedCharacterId = nextCharacters.some((character) => character.speaker_id === state.selectedCharacterId)
         ? state.selectedCharacterId
         : (firstPlayableCharacter?.speaker_id || nextCharacters[0]?.speaker_id || null);
+    syncIssueCandidateSelection(analysis.issue_candidates || []);
+    syncAdultQueueSelection(analysis.adult_queue || []);
     state.editorDocument = null;
     state.editorSelectedItemId = null;
     if (!availableFilePaths.includes(state.editorFilePath)) {
@@ -3944,6 +4297,7 @@ function populateFromAnalysis(analysis, label, options = {}) {
     renderDialoguePreview();
     renderFileTable();
     renderCharacterGrid();
+    renderIssueCandidates();
     renderAdultQueue();
     renderDocumentEditor();
     renderTranslationHint();
@@ -4077,6 +4431,24 @@ function handleAdultQueueInput(event) {
 }
 
 
+function handleAdultQueueChange(event) {
+    const checkbox = event.target.closest("[data-role='adult-select']");
+    if (!checkbox) {
+        return;
+    }
+    const itemId = checkbox.dataset.itemId || "";
+    if (!itemId) {
+        return;
+    }
+    if (checkbox.checked) {
+        state.selectedAdultQueueIds.add(itemId);
+    } else {
+        state.selectedAdultQueueIds.delete(itemId);
+    }
+    renderAdultQueue();
+}
+
+
 async function handleAdultQueueClick(event) {
     const openButton = event.target.closest("[data-action='open-adult-in-editor']");
     if (openButton) {
@@ -4130,6 +4502,61 @@ async function handleAdultQueueClick(event) {
 }
 
 
+function handleIssueCandidateSearchInput() {
+    state.issueCandidateSearchQuery = dom.issueCandidateSearchInput?.value || "";
+    renderIssueCandidates();
+}
+
+
+function handleIssueCandidateQueueChange(event) {
+    const checkbox = event.target.closest("[data-role='issue-select']");
+    if (!checkbox) {
+        return;
+    }
+    const itemId = checkbox.dataset.itemId || "";
+    if (!itemId) {
+        return;
+    }
+    if (checkbox.checked) {
+        state.selectedIssueCandidateIds.add(itemId);
+    } else {
+        state.selectedIssueCandidateIds.delete(itemId);
+    }
+    renderIssueCandidates();
+}
+
+
+async function handleIssueCandidateQueueClick(event) {
+    const openButton = event.target.closest("[data-action='open-issue-in-editor']");
+    if (openButton) {
+        const filePath = openButton.dataset.filePath || "";
+        const itemId = openButton.dataset.itemId || "";
+        if (!filePath) {
+            return;
+        }
+        state.editorFilePath = filePath;
+        if (dom.editorFileSelect) {
+            dom.editorFileSelect.value = filePath;
+        }
+        activateTab("editor");
+        await loadEditableDocument(filePath, {
+            selectedItemId: itemId || state.editorSelectedItemId,
+        });
+        return;
+    }
+
+    const retranslateButton = event.target.closest("[data-action='retranslate-issue-item']");
+    if (!retranslateButton) {
+        return;
+    }
+    const itemId = retranslateButton.dataset.itemId || "";
+    if (!itemId) {
+        return;
+    }
+    await retranslateIssueCandidates([itemId]);
+}
+
+
 function init() {
     applyTranslationPreset(DEFAULT_TRANSLATION_PRESET_ID, { log: false });
     syncStoredApiKeyForCurrentScope();
@@ -4142,6 +4569,7 @@ function init() {
     renderDialoguePreview();
     renderFileTable();
     renderCharacterGrid();
+    renderIssueCandidates();
     renderAdultQueue();
     renderResults();
     activateTab("overview");
@@ -4171,6 +4599,7 @@ function init() {
     dom.pickExeButton.addEventListener("click", pickExeAndAnalyze);
     dom.generateTemplateButton.addEventListener("click", generateTemplate);
     dom.analyzeGameButton.addEventListener("click", analyzeGame);
+    dom.repairOutputsButton?.addEventListener("click", repairTranslationOutputs);
     dom.uploadInput.addEventListener("change", handleUploadChange);
     dom.analyzeUploadsButton.addEventListener("click", analyzeUploads);
     dom.clearUploadsButton.addEventListener("click", () => {
@@ -4203,6 +4632,29 @@ function init() {
     dom.characterGrid.addEventListener("input", handleCharacterGridInput);
     dom.characterGrid.addEventListener("change", handleCharacterGridChange);
     dom.translateButton.addEventListener("click", translateSelection);
+    dom.issueCandidateSearchInput?.addEventListener("input", handleIssueCandidateSearchInput);
+    dom.selectVisibleIssueCandidatesButton?.addEventListener("click", () => {
+        getVisibleIssueCandidates().forEach((item) => state.selectedIssueCandidateIds.add(item.item_id));
+        renderIssueCandidates();
+    });
+    dom.clearIssueCandidateSelectionButton?.addEventListener("click", () => {
+        state.selectedIssueCandidateIds.clear();
+        renderIssueCandidates();
+    });
+    dom.retranslateIssueCandidatesButton?.addEventListener("click", () => {
+        retranslateIssueCandidates().catch(() => {});
+    });
+    dom.selectVisibleAdultQueueButton?.addEventListener("click", () => {
+        getAdultQueueItems().forEach((item) => state.selectedAdultQueueIds.add(item.item_id));
+        renderAdultQueue();
+    });
+    dom.clearAdultQueueSelectionButton?.addEventListener("click", () => {
+        state.selectedAdultQueueIds.clear();
+        renderAdultQueue();
+    });
+    dom.translateAdultQueueButton?.addEventListener("click", () => {
+        translateSelectedAdultQueue().catch(() => {});
+    });
     dom.saveProfileButton.addEventListener("click", saveProfile);
     dom.loadProfileButton.addEventListener("click", () => dom.profileFileInput.click());
     dom.profileFileInput.addEventListener("change", handleProfileLoad);
@@ -4243,8 +4695,13 @@ dom.documentEditor?.addEventListener("click", (event) => {
     handleDocumentEditorClick(event).catch(() => {});
 });
 dom.adultQueue?.addEventListener("input", handleAdultQueueInput);
+dom.adultQueue?.addEventListener("change", handleAdultQueueChange);
 dom.adultQueue?.addEventListener("click", (event) => {
     handleAdultQueueClick(event).catch(() => {});
+});
+dom.issueCandidateQueue?.addEventListener("change", handleIssueCandidateQueueChange);
+dom.issueCandidateQueue?.addEventListener("click", (event) => {
+    handleIssueCandidateQueueClick(event).catch(() => {});
 });
 renderDocumentEditor();
 

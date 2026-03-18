@@ -199,6 +199,11 @@ NARRATION_LINE_RE = re.compile(r'^\s*"(?P<text>(?:\\.|[^"])*)"\s*$')
 MENU_LINE_RE = re.compile(r'^\s*"(?P<text>(?:\\.|[^"])*)"\s*:\s*$')
 STRING_OLD_RE = re.compile(r'^\s*old\s+"(?P<text>(?:\\.|[^"])*)"\s*$')
 STRING_NEW_RE = re.compile(r'^\s*new\s+"(?P<text>(?:\\.|[^"])*)"\s*$')
+RENPY_SUBSTITUTION_RE = re.compile(r"(?<!\\)\[[^\[\]\n]+\]")
+RENPY_TEXT_TAG_RE = re.compile(r"\{[^{}\n]+\}")
+PYTHON_FORMAT_TOKEN_RE = re.compile(
+    r"%(?:\([^)]+\))?[#0\- +]?(?:\d+|\*)?(?:\.(?:\d+|\*))?[diouxXeEfFgGcrs]"
+)
 CHARACTER_DEFINE_RE = re.compile(
     r'^\s*define\s+(?P<speaker>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*Character\(\s*(?P<name>None|_?\(".*?"\)|".*?")'
 )
@@ -285,6 +290,19 @@ GUI_BASELINE_SIZE_KEYS = {
 }
 PASSTHROUGH_OLD_MARKER_RE = re.compile(r"^old:\d+(?:\.\d+)?(?:_\d+)?$")
 PASSTHROUGH_FILENAME_RE = re.compile(r"^[A-Za-z0-9_.\\/:\-]+\.(?:txt|log|json|png|jpg|jpeg|webp|ogg|mp3|wav|rpy|rpa)$")
+ASCII_LETTER_RE = re.compile(r"[A-Za-z]")
+TOKENISH_TEXT_RE = re.compile(r"^[A-Za-z0-9_./\\:#@+\-=]+$")
+SPRITE_STATE_LINE_RE = re.compile(r"^(?:[A-Za-z]\s+[0-9][A-Za-z0-9_]+(?:,\s*|\s+)?)+$")
+PLACEHOLDER_COUNTER_RE = re.compile(r"^\[[^\]]+\](?:/\d+(?:\.\d+)?)?$")
+GALLERY_LABEL_RE = re.compile(r"^[A-Z][A-Za-z'’-]+\s+\([A-Za-z0-9_,. ]+\)$")
+SENTENCE_HINT_WORDS = {
+    "a", "am", "an", "and", "are", "as", "at", "be", "been", "but", "come", "dear", "did", "do", "for",
+    "from", "good", "got", "had", "has", "have", "he", "hello", "help", "her", "here", "hey", "him",
+    "his", "how", "i", "if", "in", "is", "it", "just", "know", "like", "love", "me", "my", "no", "not",
+    "now", "of", "oh", "on", "or", "our", "out", "please", "poor", "right", "she", "so", "sorry", "that",
+    "the", "their", "them", "there", "they", "thing", "this", "to", "up", "was", "we", "well", "what",
+    "where", "who", "why", "will", "with", "would", "yes", "you", "your",
+}
 NON_RETRYABLE_TRANSLATION_ERROR_PATTERNS = (
     "insufficient credits",
     "quota",
@@ -1751,6 +1769,108 @@ def escape_renpy_text(text: str) -> str:
     )
 
 
+def unescape_renpy_text(text: str) -> str:
+    if not text or "\\" not in text:
+        return text
+
+    buffer: List[str] = []
+    pointer = 0
+    while pointer < len(text):
+        current = text[pointer]
+        if current != "\\" or pointer + 1 >= len(text):
+            buffer.append(current)
+            pointer += 1
+            continue
+
+        next_char = text[pointer + 1]
+        if next_char == "n":
+            buffer.append("\n")
+        elif next_char == "t":
+            buffer.append("\t")
+        elif next_char == "r":
+            buffer.append("\r")
+        elif next_char in ('"', "\\"):
+            buffer.append(next_char)
+        else:
+            buffer.append(next_char)
+        pointer += 2
+
+    return "".join(buffer)
+
+
+def decode_renpy_text_literal(text: str, max_depth: int = 2) -> str:
+    decoded = text or ""
+    for _ in range(max(1, max_depth)):
+        next_decoded = unescape_renpy_text(decoded)
+        if next_decoded == decoded:
+            break
+        decoded = next_decoded
+    return decoded
+
+
+def normalize_renpy_string_literal_text(text: str) -> str:
+    return escape_renpy_text(decode_renpy_text_literal(text))
+
+
+def restore_token_sequence(source_text: str, translated_text: str, token_pattern: re.Pattern[str]) -> str:
+    source_matches = list(token_pattern.finditer(source_text or ""))
+    translated_matches = list(token_pattern.finditer(translated_text or ""))
+    if not source_matches or not translated_matches:
+        return translated_text
+
+    source_tokens = [match.group(0) for match in source_matches]
+    translated_tokens = [match.group(0) for match in translated_matches]
+    if source_tokens == translated_tokens:
+        return translated_text
+
+    rebuilt_parts: List[str] = []
+    cursor = 0
+    for index, match in enumerate(translated_matches):
+        rebuilt_parts.append(translated_text[cursor:match.start()])
+        if index < len(source_tokens):
+            rebuilt_parts.append(source_tokens[index])
+        else:
+            rebuilt_parts.append(match.group(0))
+        cursor = match.end()
+    rebuilt_parts.append(translated_text[cursor:])
+    return "".join(rebuilt_parts)
+
+
+def restore_renpy_substitutions(source_text: str, translated_text: str) -> str:
+    return restore_token_sequence(source_text, translated_text, RENPY_SUBSTITUTION_RE)
+
+
+def restore_renpy_text_tags(source_text: str, translated_text: str) -> str:
+    return restore_token_sequence(source_text, translated_text, RENPY_TEXT_TAG_RE)
+
+
+def restore_python_format_tokens(source_text: str, translated_text: str) -> str:
+    return restore_token_sequence(source_text, translated_text, PYTHON_FORMAT_TOKEN_RE)
+
+
+def is_token_scaffold_text(text: str) -> bool:
+    decoded = decode_renpy_text_literal(text or "")
+    cleaned = decoded
+    for token_pattern in (RENPY_SUBSTITUTION_RE, RENPY_TEXT_TAG_RE, PYTHON_FORMAT_TOKEN_RE):
+        cleaned = token_pattern.sub("", cleaned)
+    cleaned = re.sub(r"\s+", "", cleaned)
+    cleaned = re.sub(r"[\"'“”‘’`~!@#$^&*()\-_=+|\\/:;,.?<>]+", "", cleaned)
+    return not cleaned
+
+
+def normalize_translated_text_for_item(source_text: str, translated_text: str, block_id: Optional[str] = None) -> str:
+    if is_token_scaffold_text(source_text):
+        normalized = decode_renpy_text_literal(source_text)
+    else:
+        normalized = decode_renpy_text_literal(translated_text)
+        normalized = restore_renpy_substitutions(source_text, normalized)
+        normalized = restore_renpy_text_tags(source_text, normalized)
+        normalized = restore_python_format_tokens(source_text, normalized)
+    if block_id == "strings":
+        return normalize_renpy_string_literal_text(normalized)
+    return escape_renpy_text(normalized)
+
+
 def detect_adult_content(text: str) -> Dict[str, Any]:
     lowered = text.lower()
     hits = sorted({keyword for keyword in ADULT_KEYWORDS if keyword in lowered})
@@ -2291,7 +2411,7 @@ def parse_translation_file(
             for offset, line in enumerate(block_lines, start=0):
                 old_match = STRING_OLD_RE.match(line)
                 if old_match:
-                    old_text = old_match.group("text")
+                    old_text = decode_renpy_text_literal(old_match.group("text"))
                     continue
                 new_match = STRING_NEW_RE.match(line)
                 if new_match and old_text is not None:
@@ -2401,7 +2521,7 @@ def parse_source_file(
 
         old_match = STRING_OLD_RE.match(line)
         if old_match:
-            pending_old_text = old_match.group("text")
+            pending_old_text = decode_renpy_text_literal(old_match.group("text"))
             continue
 
         new_match = STRING_NEW_RE.match(line)
@@ -2421,7 +2541,7 @@ def parse_source_file(
                         line_number=line_index + 1,
                         target_line_index=line_index,
                         source_text=pending_old_text,
-                        current_text=new_match.group("text"),
+                        current_text=decode_renpy_text_literal(new_match.group("text")),
                         before=pieces["before"],
                         after=pieces["after"],
                         adult=adult_info["adult"],
@@ -2582,7 +2702,7 @@ def parse_translation_file_from_content(
             for offset, line in enumerate(block_lines, start=0):
                 old_match = STRING_OLD_RE.match(line)
                 if old_match:
-                    old_text = old_match.group("text")
+                    old_text = decode_renpy_text_literal(old_match.group("text"))
                     continue
                 new_match = STRING_NEW_RE.match(line)
                 if new_match and old_text is not None:
@@ -2603,7 +2723,7 @@ def parse_translation_file_from_content(
                             line_number=line_index + 1,
                             target_line_index=line_index,
                             source_text=old_text,
-                            current_text=new_match.group("text"),
+                            current_text=decode_renpy_text_literal(new_match.group("text")),
                             before=pieces["before"],
                             after=pieces["after"],
                             adult=adult_info["adult"],
@@ -2693,7 +2813,7 @@ def parse_source_file_from_content(
 
         old_match = STRING_OLD_RE.match(line)
         if old_match:
-            pending_old_text = old_match.group("text")
+            pending_old_text = unescape_renpy_text(old_match.group("text"))
             continue
 
         new_match = STRING_NEW_RE.match(line)
@@ -2713,7 +2833,7 @@ def parse_source_file_from_content(
                         line_number=line_index + 1,
                         target_line_index=line_index,
                         source_text=pending_old_text,
-                        current_text=new_match.group("text"),
+                            current_text=decode_renpy_text_literal(new_match.group("text")),
                         before=pieces["before"],
                         after=pieces["after"],
                         adult=adult_info["adult"],
@@ -3088,6 +3208,106 @@ def is_meaningfully_translated(source_text: str, translated_text: str) -> bool:
     return translated != normalize_translation_compare_text(source_text)
 
 
+def get_existing_live_translation_text(item: TranslationItem) -> str:
+    for candidate in (
+        item.workbench_translation_text,
+        item.connected_translation_text,
+        item.current_text,
+    ):
+        if normalize_translation_compare_text(candidate):
+            return candidate
+    return ""
+
+
+def build_issue_candidate_reason(item: TranslationItem) -> Tuple[str, str]:
+    source_text = normalize_translation_compare_text(item.source_text)
+    if normalize_translation_compare_text(item.workbench_translation_text) == source_text:
+        return ("workbench_same_as_source", "워크벤치 출력이 원문 그대로 남아 있음")
+    if normalize_translation_compare_text(item.connected_translation_text) == source_text:
+        return ("connected_same_as_source", "게임 연결 번역이 원문 그대로 남아 있음")
+    if normalize_translation_compare_text(item.current_text) == source_text:
+        return ("current_layer_same_as_source", "현재 번역 레이어가 원문 그대로 남아 있음")
+    return ("missing_translation", "번역문이 아직 연결되지 않았거나 비어 있음")
+
+
+def should_skip_issue_candidate(item: TranslationItem) -> bool:
+    source_text = (item.source_text or "").strip()
+    if not source_text:
+        return True
+    if item.kind not in {"dialogue", "narration", "string"}:
+        return True
+    if is_passthrough_translation_item(item):
+        return True
+    if is_markup_only_text(source_text) or is_low_signal_sample(source_text):
+        return True
+    if "{#donottranslate" in source_text.lower():
+        return True
+
+    cleaned = re.sub(r"\{[^{}]+\}", "", source_text)
+    cleaned = cleaned.replace("\\n", " ").replace("\n", " ").strip()
+    if not cleaned or not ASCII_LETTER_RE.search(cleaned):
+        return True
+    if PLACEHOLDER_COUNTER_RE.fullmatch(cleaned):
+        return True
+    if GALLERY_LABEL_RE.fullmatch(cleaned):
+        return True
+    if SPRITE_STATE_LINE_RE.fullmatch(cleaned):
+        return True
+    token_parts = re.findall(r"[A-Za-z0-9_]+", cleaned)
+    if token_parts:
+        single_letter_alpha_count = sum(1 for part in token_parts if len(part) == 1 and part.isalpha())
+        if single_letter_alpha_count >= 2:
+            return True
+        if (
+            len(token_parts[0]) == 1
+            and token_parts[0].isalpha()
+            and any(any(character.isdigit() for character in part) for part in token_parts[1:])
+        ):
+            return True
+    word_parts = [part.lower() for part in re.findall(r"[A-Za-z']+", cleaned)]
+    has_sentence_hint = any(part in SENTENCE_HINT_WORDS for part in word_parts)
+    has_sentence_punctuation = any(token in cleaned for token in ("?", "!", "...", "…", ".", ";", ":"))
+    if word_parts and len(word_parts) <= 4 and not has_sentence_hint and not has_sentence_punctuation:
+        return True
+    if TOKENISH_TEXT_RE.fullmatch(cleaned) and " " not in cleaned and len(cleaned) <= 24:
+        return True
+    return False
+
+
+def build_issue_candidate_payload(item: TranslationItem) -> Optional[Dict[str, Any]]:
+    if item.translation_status != "untranslated":
+        return None
+    if should_skip_issue_candidate(item):
+        return None
+
+    cleaned = re.sub(r"\s+", " ", re.sub(r"\{[^{}]+\}", "", (item.source_text or "").replace("\\n", " ")).strip())
+    reason_code, reason_text = build_issue_candidate_reason(item)
+    score = 0
+    if item.kind in {"dialogue", "narration"}:
+        score += 2
+    if " " in cleaned:
+        score += 3
+    if len(cleaned) >= 20:
+        score += 2
+    if len(cleaned) >= 60:
+        score += 1
+    if any(token in cleaned for token in ("?", "!", ",", ";", ":")):
+        score += 1
+    if item.adult:
+        score += 1
+
+    payload = item.to_public_dict()
+    payload.update(
+        {
+            "issue_reason_code": reason_code,
+            "issue_reason": reason_text,
+            "issue_score": score,
+            "issue_live_text": get_existing_live_translation_text(item),
+        }
+    )
+    return payload
+
+
 def load_existing_translation_lookup(
     analyzed_files: List[AnalyzedFile],
     character_registry: Dict[str, Dict[str, Any]],
@@ -3220,16 +3440,27 @@ def annotate_existing_translation_state(
     connected_lookup: Dict[str, Any] = {"by_item_id": {}, "by_match_key": {}}
     if game_dir:
         game_dir_path = Path(game_dir)
-        embedded_output_migration = migrate_embedded_workbench_output_root(game_dir_path)
+        repair_summary = repair_workbench_outputs_for_game(
+            game_dir_path,
+            target_language,
+            force_cache_cleanup=False,
+        )
+        embedded_output_migration = repair_summary["embedded_output_migration"]
+        nested_artifact_migration = repair_summary["nested_artifact_migration"]
+        repaired_outputs = repair_summary["repaired_outputs"]
         if embedded_output_migration.get("migrated"):
             log_message(
                 f"embedded workbench output moved outside game dir: {embedded_output_migration['embedded_root']} -> {embedded_output_migration['safe_root']}",
                 "Translation",
             )
-        nested_artifact_migration = migrate_nested_workbench_artifacts(game_dir_path)
         if nested_artifact_migration.get("migrated"):
             log_message(
                 f"nested workbench artifacts recovered from tl folders: {len(nested_artifact_migration['moved_paths'])} path(s)",
+                "Translation",
+            )
+        if repaired_outputs.get("repaired"):
+            log_message(
+                f"repaired malformed workbench translation blocks: {len(repaired_outputs['changed_paths'])} file(s)",
                 "Translation",
             )
         for overlay in collect_connected_translation_overlays(game_dir_path, target_language):
@@ -3323,6 +3554,7 @@ def build_analysis_response(
         for key, value in character_registry.items()
     }
     adult_queue: List[Dict[str, Any]] = []
+    issue_candidates: List[Dict[str, Any]] = []
     term_counts: Dict[str, int] = {}
     dialogue_preview: List[Dict[str, Any]] = []
     dialogue_preview_limits = {
@@ -3434,11 +3666,24 @@ def build_analysis_response(
                         }
                     )
 
+            issue_candidate = build_issue_candidate_payload(item)
+            if issue_candidate is not None:
+                issue_candidates.append(issue_candidate)
+
             for term in PROPER_NOUN_RE.findall(item.source_text):
                 lowered = term.lower()
                 if len(term) < 3 or lowered in PROPER_NOUN_STOPWORDS or lowered in {"and", "but"}:
                     continue
                 term_counts[term] = term_counts.get(term, 0) + 1
+
+    issue_candidates.sort(
+        key=lambda entry: (
+            -int(entry.get("issue_score") or 0),
+            str(entry.get("file_relative_path") or ""),
+            int(entry.get("line_number") or 0),
+            str(entry.get("item_id") or ""),
+        )
+    )
 
     glossary_suggestions = []
     for term, count in sorted(term_counts.items(), key=lambda pair: (-pair[1], pair[0]))[:20]:
@@ -3478,6 +3723,7 @@ def build_analysis_response(
         "characters": character_payload,
         "dialogue_preview": dialogue_preview,
         "adult_queue": adult_queue,
+        "issue_candidates": issue_candidates,
         "summary": {
             "file_count": len(analyzed_files),
             "item_count": total_items,
@@ -3485,6 +3731,7 @@ def build_analysis_response(
             "narration_count": narration_count,
             "string_count": string_count,
             "adult_item_count": adult_count,
+            "issue_candidate_count": len(issue_candidates),
             "untranslated_item_count": untranslated_count,
             "game_translated_item_count": game_translated_count,
             "workbench_translated_item_count": workbench_translated_count,
@@ -3577,6 +3824,15 @@ def normalize_selected_speaker_ids(payload: Dict[str, Any]) -> Set[str]:
     return normalized_ids
 
 
+def normalize_selected_item_ids(payload: Dict[str, Any]) -> Set[str]:
+    normalized_ids: Set[str] = set()
+    for entry in payload.get("selected_item_ids") or []:
+        candidate = str(entry or "").strip()
+        if candidate:
+            normalized_ids.add(candidate)
+    return normalized_ids
+
+
 def filter_documents_by_speaker_ids(
     documents: List[AnalyzedFile],
     selected_speaker_ids: Set[str],
@@ -3590,6 +3846,36 @@ def filter_documents_by_speaker_ids(
             item
             for item in document.items
             if (item.speaker_id or NARRATION_PERSONA_KEY) in selected_speaker_ids
+        ]
+        if not filtered_items:
+            continue
+        filtered_documents.append(
+            AnalyzedFile(
+                absolute_path=document.absolute_path,
+                file_relative_path=document.file_relative_path,
+                output_relative_path=document.output_relative_path,
+                file_name=document.file_name,
+                file_mode=document.file_mode,
+                raw_content=document.raw_content,
+                items=filtered_items,
+            )
+        )
+    return filtered_documents
+
+
+def filter_documents_by_item_ids(
+    documents: List[AnalyzedFile],
+    selected_item_ids: Set[str],
+) -> List[AnalyzedFile]:
+    if not selected_item_ids:
+        return documents
+
+    filtered_documents: List[AnalyzedFile] = []
+    for document in documents:
+        filtered_items = [
+            item
+            for item in document.items
+            if item.item_id in selected_item_ids
         ]
         if not filtered_items:
             continue
@@ -3656,6 +3942,7 @@ def get_documents_for_translation(payload: Dict[str, Any]) -> Dict[str, Any]:
     target_language = payload.get("target_language") or DEFAULT_TARGET_LANGUAGE
     selected_files = set(payload.get("selected_files") or [])
     selected_speaker_ids = normalize_selected_speaker_ids(payload)
+    selected_item_ids = normalize_selected_item_ids(payload)
     translation_rule = normalize_translation_rule(payload)
     incoming_scope = payload.get("translation_scope") or {}
     selected_speaker_names = [
@@ -3701,6 +3988,8 @@ def get_documents_for_translation(payload: Dict[str, Any]) -> Dict[str, Any]:
         )
         filtered_documents = filter_documents_by_speaker_ids(analyzed_files, selected_speaker_ids)
         filtered_documents = filter_documents_by_translation_rule(filtered_documents, translation_rule)
+        filtered_documents = filter_documents_by_item_ids(filtered_documents, selected_item_ids)
+        scope_mode = "selected_items" if selected_item_ids else ("selected_speakers" if selected_speaker_ids else "all_items")
 
         return {
             "documents": filtered_documents,
@@ -3709,9 +3998,11 @@ def get_documents_for_translation(payload: Dict[str, Any]) -> Dict[str, Any]:
             "target_language": target_language,
             "game_dir": game_dir_str,
             "translation_scope": {
-                "mode": "selected_speakers" if selected_speaker_ids else "all_items",
+                "mode": scope_mode,
                 "selected_speaker_ids": sorted(selected_speaker_ids),
                 "selected_speaker_names": selected_speaker_names,
+                "selected_item_ids": sorted(selected_item_ids),
+                "selected_item_count": len(selected_item_ids),
                 "translation_rule": translation_rule,
                 "force_retranslate": bool(payload.get("force_retranslate")) or translation_rule != "missing_only",
             },
@@ -3757,6 +4048,8 @@ def get_documents_for_translation(payload: Dict[str, Any]) -> Dict[str, Any]:
     )
     filtered_documents = filter_documents_by_speaker_ids(analyzed_files, selected_speaker_ids)
     filtered_documents = filter_documents_by_translation_rule(filtered_documents, translation_rule)
+    filtered_documents = filter_documents_by_item_ids(filtered_documents, selected_item_ids)
+    scope_mode = "selected_items" if selected_item_ids else ("selected_speakers" if selected_speaker_ids else "all_items")
 
     return {
         "documents": filtered_documents,
@@ -3765,9 +4058,11 @@ def get_documents_for_translation(payload: Dict[str, Any]) -> Dict[str, Any]:
         "target_language": target_language,
         "game_dir": None,
         "translation_scope": {
-            "mode": "selected_speakers" if selected_speaker_ids else "all_items",
+            "mode": scope_mode,
             "selected_speaker_ids": sorted(selected_speaker_ids),
             "selected_speaker_names": selected_speaker_names,
+            "selected_item_ids": sorted(selected_item_ids),
+            "selected_item_count": len(selected_item_ids),
             "translation_rule": translation_rule,
             "force_retranslate": bool(payload.get("force_retranslate")) or translation_rule != "missing_only",
         },
@@ -5375,6 +5670,7 @@ def build_translated_document_lines(
     publish_language_code: Optional[str] = None,
     base_content: Optional[str] = None,
 ) -> Dict[str, Any]:
+    source_lines = document.raw_content.splitlines()
     output_lines = (base_content if isinstance(base_content, str) else document.raw_content).splitlines()
     local_failures: List[Dict[str, Any]] = []
     translated_count = 0
@@ -5387,7 +5683,12 @@ def build_translated_document_lines(
             else:
                 local_failures.append(item.to_public_dict())
             continue
-        replacement = escape_renpy_text(translated_lookup[item.item_id])
+        replacement_source = translated_lookup[item.item_id]
+        replacement = normalize_translated_text_for_item(
+            source_text=item.source_text,
+            translated_text=replacement_source,
+            block_id=item.block_id,
+        )
         output_lines[item.target_line_index] = f'{item.before}{replacement}"{item.after}'
         translated_count += 1
 
@@ -5400,17 +5701,247 @@ def build_translated_document_lines(
             output_lines[index] = f"{indentation}translate {publish_language_code} {header_match.group('label')}:"
 
         for item in document.items:
-            if item.kind == "string" and item.item_id in translated_lookup:
+            if item.block_id == "strings" and item.item_id in translated_lookup:
                 old_idx = item.target_line_index - 1
-                if 0 <= old_idx < len(output_lines):
-                    old_indent = re.match(r"^\s*", output_lines[old_idx]).group(0)
-                    output_lines[old_idx] = f'{old_indent}old "{escape_renpy_text(item.source_text)}"'
+                if 0 <= old_idx < len(output_lines) and old_idx < len(source_lines):
+                    # Keep the original tl/<lang> old-line exactly as Ren'Py extracted it.
+                    # Re-escaping item.source_text here would double-escape sequences like
+                    # \" and \n, which breaks publish bundle matching in-game.
+                    output_lines[old_idx] = source_lines[old_idx]
 
     return {
         "output_lines": output_lines,
         "translated_count": translated_count,
         "skipped_count": skipped_count,
         "local_failures": local_failures,
+    }
+
+
+def collect_translate_blocks(lines: List[str]) -> List[Dict[str, Any]]:
+    blocks: List[Dict[str, Any]] = []
+    label_counts: Dict[str, int] = {}
+    pointer = 0
+    while pointer < len(lines):
+        header_match = TRANSLATE_HEADER_RE.match(lines[pointer])
+        if not header_match:
+            pointer += 1
+            continue
+
+        label = header_match.group("label")
+        start = pointer
+        pointer += 1
+        while pointer < len(lines) and not TRANSLATE_HEADER_RE.match(lines[pointer]):
+            pointer += 1
+
+        occurrence = label_counts.get(label, 0)
+        label_counts[label] = occurrence + 1
+        blocks.append(
+            {
+                "key": (label, occurrence),
+                "label": label,
+                "start": start,
+                "end": pointer,
+                "lines": lines[start:pointer],
+            }
+        )
+    return blocks
+
+
+def is_live_translation_output_line(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        return False
+    if STRING_OLD_RE.match(line) or STRING_NEW_RE.match(line):
+        return False
+    return '"' in line
+
+
+def extract_primary_translation_line(block_lines: List[str]) -> Optional[str]:
+    for line in block_lines:
+        if is_live_translation_output_line(line):
+            return line
+    return None
+
+
+def normalize_live_translation_line(source_line: str, translated_line: str) -> str:
+    source_pieces = split_first_quoted_string(source_line)
+    translated_pieces = split_first_quoted_string(translated_line)
+    if not source_pieces or not translated_pieces:
+        return translated_line
+    normalized_text = normalize_translated_text_for_item(
+        source_text=decode_renpy_text_literal(source_pieces["text"]),
+        translated_text=translated_pieces["text"],
+        block_id=None,
+    )
+    return f'{source_pieces["before"]}{normalized_text}"{source_pieces["after"]}'
+
+
+def repair_string_translation_block_lines(
+    source_block_lines: List[str],
+    output_block_lines: List[str],
+) -> Optional[List[str]]:
+    if len(source_block_lines) != len(output_block_lines):
+        return None
+
+    repaired_lines = [output_block_lines[0]]
+    changed = False
+    pending_old_text = ""
+
+    for source_line, output_line in zip(source_block_lines[1:], output_block_lines[1:]):
+        source_old_match = STRING_OLD_RE.match(source_line)
+        if source_old_match:
+            pending_old_text = decode_renpy_text_literal(source_old_match.group("text"))
+
+        if STRING_NEW_RE.match(output_line):
+            output_match = STRING_NEW_RE.match(output_line)
+            indentation = re.match(r"^\s*", output_line).group(0)
+            normalized_output_line = f'{indentation}new "{normalize_translated_text_for_item(pending_old_text, output_match.group("text"), "strings")}"'
+            repaired_lines.append(normalized_output_line)
+            if normalized_output_line != output_line:
+                changed = True
+            continue
+        repaired_lines.append(source_line)
+        if source_line != output_line:
+            changed = True
+
+    if not changed:
+        return None
+    return repaired_lines
+
+
+def repair_translation_layer_output_file(source_path: Path, output_path: Path) -> bool:
+    if not source_path.is_file() or not output_path.is_file():
+        return False
+
+    try:
+        source_lines = source_path.read_text(encoding="utf-8").splitlines()
+        output_lines = output_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return False
+
+    source_blocks = collect_translate_blocks(source_lines)
+    output_blocks = collect_translate_blocks(output_lines)
+    output_block_lookup = {block["key"]: block for block in output_blocks}
+    repaired_lines = list(output_lines)
+    changed = False
+
+    for source_block in reversed(source_blocks):
+        output_block = output_block_lookup.get(source_block["key"])
+        if not output_block:
+            continue
+
+        if source_block["label"] == "strings":
+            repaired_block_lines = repair_string_translation_block_lines(
+                source_block["lines"],
+                output_block["lines"],
+            )
+            if repaired_block_lines is not None:
+                repaired_lines[output_block["start"] : output_block["end"]] = repaired_block_lines
+                changed = True
+            continue
+
+        translated_line = extract_primary_translation_line(output_block["lines"][1:])
+        if not translated_line:
+            continue
+
+        new_block_lines = [output_block["lines"][0]]
+        replaced_translation = False
+        for source_line in source_block["lines"][1:]:
+            if not replaced_translation and is_live_translation_output_line(source_line):
+                new_block_lines.append(normalize_live_translation_line(source_line, translated_line))
+                replaced_translation = True
+            else:
+                new_block_lines.append(source_line)
+
+        if replaced_translation and new_block_lines != output_block["lines"]:
+            repaired_lines[output_block["start"] : output_block["end"]] = new_block_lines
+            changed = True
+
+    if not changed:
+        return False
+
+    output_path.write_text("\n".join(repaired_lines) + "\n", encoding="utf-8")
+    invalidate_compiled_translation_file(output_path)
+    return True
+
+
+def repair_existing_translation_layer_outputs(
+    game_dir_path: Path,
+    target_language: str,
+    publish_language_code: Optional[str] = None,
+) -> Dict[str, Any]:
+    source_root = game_dir_path / "tl" / normalize_language_code(target_language)
+    if not source_root.is_dir():
+        return {"repaired": False, "changed_paths": [], "reason": "missing_source_root"}
+
+    candidate_roots: List[Path] = []
+    stage_root = get_translation_layer_stage_root(game_dir_path, target_language)
+    if stage_root.is_dir():
+        candidate_roots.append(stage_root)
+
+    publish_codes = {default_publish_language_code(target_language, "translation_layer")}
+    if publish_language_code:
+        publish_codes.add(normalize_language_code(publish_language_code))
+
+    tl_root = game_dir_path / "tl"
+    if tl_root.is_dir():
+        for manifest_path in tl_root.glob("*/zz_workbench_publish_manifest.json"):
+            publish_codes.add(manifest_path.parent.name)
+
+    for language_code in sorted(publish_codes):
+        publish_root = tl_root / language_code
+        if publish_root.is_dir():
+            candidate_roots.append(publish_root)
+
+    changed_paths: List[str] = []
+    seen_roots: Set[Path] = set()
+    for root_path in candidate_roots:
+        if root_path in seen_roots:
+            continue
+        seen_roots.add(root_path)
+        for source_path in source_root.rglob("*.rpy"):
+            relative_path = source_path.relative_to(source_root)
+            output_path = root_path / relative_path
+            if repair_translation_layer_output_file(source_path, output_path):
+                changed_paths.append(str(output_path))
+
+    if changed_paths:
+        clear_renpy_cache_files(game_dir_path)
+        clear_translation_compiled_files(game_dir_path)
+
+    return {
+        "repaired": bool(changed_paths),
+        "changed_paths": changed_paths,
+        "reason": "repaired" if changed_paths else "already_clean",
+    }
+
+
+def repair_workbench_outputs_for_game(
+    game_dir_path: Path,
+    target_language: str,
+    publish_language_code: Optional[str] = None,
+    force_cache_cleanup: bool = True,
+) -> Dict[str, Any]:
+    embedded_output_migration = migrate_embedded_workbench_output_root(game_dir_path)
+    nested_artifact_migration = migrate_nested_workbench_artifacts(game_dir_path)
+    repaired_outputs = repair_existing_translation_layer_outputs(
+        game_dir_path,
+        target_language,
+        publish_language_code=publish_language_code,
+    )
+
+    cache_cleanup_files: List[str] = []
+    compiled_cleanup_files: List[str] = []
+    if force_cache_cleanup:
+        cache_cleanup_files = clear_renpy_cache_files(game_dir_path)
+        compiled_cleanup_files = clear_translation_compiled_files(game_dir_path)
+
+    return {
+        "embedded_output_migration": embedded_output_migration,
+        "nested_artifact_migration": nested_artifact_migration,
+        "repaired_outputs": repaired_outputs,
+        "cache_cleanup_files": cache_cleanup_files,
+        "compiled_cleanup_files": compiled_cleanup_files,
     }
 
 
@@ -5611,16 +6142,35 @@ def prepare_translation_output_context(
     publish_settings: Optional[Dict[str, Any]] = None,
 ) -> TranslationOutputContext:
     game_dir_path = Path(game_dir)
-    embedded_output_migration = migrate_embedded_workbench_output_root(game_dir_path)
+    gui_baseline = extract_gui_baseline(game_dir_path) if analysis_mode == "translation_layer" else {}
+    normalized_publish_settings = normalize_publish_settings_payload(
+        publish_settings=publish_settings,
+        target_language=target_language,
+        analysis_mode=analysis_mode,
+        gui_baseline=gui_baseline,
+    )
+    repair_summary = repair_workbench_outputs_for_game(
+        game_dir_path,
+        target_language,
+        publish_language_code=normalized_publish_settings.get("language_code"),
+        force_cache_cleanup=False,
+    )
+    embedded_output_migration = repair_summary["embedded_output_migration"]
     if embedded_output_migration.get("migrated"):
         log_message(
             f"embedded workbench output moved outside game dir: {embedded_output_migration['embedded_root']} -> {embedded_output_migration['safe_root']}",
             "Translation",
         )
-    nested_artifact_migration = migrate_nested_workbench_artifacts(game_dir_path)
+    nested_artifact_migration = repair_summary["nested_artifact_migration"]
     if nested_artifact_migration.get("migrated"):
         log_message(
             f"nested workbench artifacts recovered from tl folders: {len(nested_artifact_migration['moved_paths'])} path(s)",
+            "Translation",
+        )
+    repaired_outputs = repair_summary["repaired_outputs"]
+    if repaired_outputs.get("repaired"):
+        log_message(
+            f"repaired malformed workbench translation blocks: {len(repaired_outputs['changed_paths'])} file(s)",
             "Translation",
         )
     if analysis_mode == "translation_layer":
@@ -5635,13 +6185,6 @@ def prepare_translation_output_context(
         output_root = get_source_stage_root(game_dir_path, target_language)
 
     output_root.mkdir(parents=True, exist_ok=True)
-    gui_baseline = extract_gui_baseline(game_dir_path) if analysis_mode == "translation_layer" else {}
-    normalized_publish_settings = normalize_publish_settings_payload(
-        publish_settings=publish_settings,
-        target_language=target_language,
-        analysis_mode=analysis_mode,
-        gui_baseline=gui_baseline,
-    )
     publish_bundle = {
         "enabled": False,
         "supported": analysis_mode == "translation_layer",
@@ -6151,6 +6694,51 @@ def analyze_sources() -> Any:
     return jsonify({"error": "분석할 게임 경로 또는 파일 데이터가 없습니다."}), 400
 
 
+@app.route("/repair_translation_outputs", methods=["POST"])
+def repair_translation_outputs() -> Any:
+    data = request.get_json(force=True) or {}
+    game_exe_path = data.get("game_exe_path") or game_exe_path_from_startup
+    target_language = data.get("target_language") or DEFAULT_TARGET_LANGUAGE
+    publish_settings = data.get("publish_settings") or {}
+
+    if not game_exe_path:
+        return jsonify({"error": "game_exe_path媛 ?꾩슂?⑸땲??"}), 400
+
+    game_dir_str = find_game_directory(game_exe_path)
+    if not game_dir_str:
+        return jsonify({"error": "'game' ?대뜑瑜?李얠쓣 ???놁뒿?덈떎."}), 400
+
+    game_dir_path = Path(game_dir_str)
+    normalized_publish_settings = normalize_publish_settings_payload(
+        publish_settings=publish_settings,
+        target_language=target_language,
+        analysis_mode="translation_layer",
+        gui_baseline=extract_gui_baseline(game_dir_path),
+    )
+    repair_summary = repair_workbench_outputs_for_game(
+        game_dir_path,
+        target_language,
+        publish_language_code=normalized_publish_settings.get("language_code"),
+        force_cache_cleanup=True,
+    )
+    repaired_outputs = repair_summary["repaired_outputs"]
+    return jsonify(
+        {
+            "status": "success",
+            "game_dir": str(game_dir_path),
+            "target_language": normalize_language_code(target_language),
+            "publish_language_code": normalized_publish_settings.get("language_code"),
+            "embedded_output_migration": repair_summary["embedded_output_migration"],
+            "nested_artifact_migration": repair_summary["nested_artifact_migration"],
+            "repaired_outputs": repaired_outputs,
+            "cache_cleanup_count": len(repair_summary["cache_cleanup_files"]),
+            "compiled_cleanup_count": len(repair_summary["compiled_cleanup_files"]),
+            "cache_cleanup_files": repair_summary["cache_cleanup_files"],
+            "compiled_cleanup_files": repair_summary["compiled_cleanup_files"],
+        }
+    )
+
+
 @app.route("/generate_files_for_translation", methods=["POST"])
 def handle_generate_files() -> Any:
     log_message("'/generate_files_for_translation' 요청 수신")
@@ -6476,8 +7064,11 @@ def handle_translation() -> Any:
         translation_inputs = get_documents_for_translation(data)
         documents = translation_inputs["documents"]
         if not documents:
+            scope = translation_inputs.get("translation_scope") or {}
             translation_rule = (translation_inputs.get("translation_scope") or {}).get("translation_rule") or "missing_only"
-            if translation_rule == "retranslate_existing":
+            if scope.get("mode") == "selected_items":
+                message = "현재 범위에는 다시 번역할 문제 후보 항목이 없습니다."
+            elif translation_rule == "retranslate_existing":
                 message = "현재 범위에는 재번역할 기존 번역 항목이 없습니다."
             elif translation_rule == "missing_only":
                 message = "현재 범위에는 미번역 항목이 없습니다."
@@ -6592,7 +7183,12 @@ def handle_translation() -> Any:
                     else:
                         failed_count += 1
                     continue
-                replacement = escape_renpy_text(translation_payload["translated_lookup"][item.item_id])
+                replacement_source = translation_payload["translated_lookup"][item.item_id]
+                replacement = normalize_translated_text_for_item(
+                    source_text=item.source_text,
+                    translated_text=replacement_source,
+                    block_id=item.block_id,
+                )
                 output_lines[item.target_line_index] = f'{item.before}{replacement}"{item.after}'
                 translated_count += 1
 

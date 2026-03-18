@@ -1,15 +1,162 @@
 @echo off
-title Application Launcher
+setlocal EnableExtensions EnableDelayedExpansion
+title Ren'Py Translation Workbench Launcher
 
-:: 3. 웹 UI HTML 파일 실행
-echo WebUI.HTML을 기본 웹 브라우저에서 엽니다...
-start WebUI.HTML
+for %%I in ("%~dp0.") do set "APP_ROOT=%%~fI"
+cd /d "%APP_ROOT%"
 
-:: 2. 백엔드 파이썬 스크립트 실행
-echo RBackend.py를 실행합니다...
-python RBackend.py
+set "BACKEND_URL=http://127.0.0.1:5000/health"
+set "WEB_URL=http://127.0.0.1:8765/WebUI.HTML"
+set "VENV_DIR=%APP_ROOT%\.venv"
+set "VENV_PY=%VENV_DIR%\Scripts\python.exe"
+set "VENV_PYW=%VENV_DIR%\Scripts\pythonw.exe"
+set "LAUNCH_PY=%VENV_PY%"
+set "BOOTSTRAP_PYTHON="
 
+echo [1/7] Checking Python runtime...
+call :resolve_python
+if errorlevel 1 goto :fail
 
+echo [2/7] Preparing virtual environment...
+if not exist "%VENV_PY%" (
+    call %BOOTSTRAP_PYTHON% -m venv "%VENV_DIR%"
+    if errorlevel 1 (
+        echo Failed to create the virtual environment.
+        goto :fail
+    )
+)
+if exist "%VENV_PYW%" set "LAUNCH_PY=%VENV_PYW%"
+
+echo [3/7] Installing Python packages...
+"%VENV_PY%" -m pip install --disable-pip-version-check --upgrade pip >nul
+if errorlevel 1 (
+    echo Failed to upgrade pip.
+    goto :fail
+)
+"%VENV_PY%" -m pip install --disable-pip-version-check -r "%APP_ROOT%\requirements.txt"
+if errorlevel 1 (
+    echo Failed to install required Python packages.
+    goto :fail
+)
+
+echo [4/7] Checking optional Node.js runtime for Codex CLI...
+call :ensure_node_runtime
+
+echo [5/7] Preparing bundled Ren'Py SDK...
+if not exist "%APP_ROOT%\renpy_sdk" (
+    if exist "%APP_ROOT%\renpy_sdk.zip" (
+        powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -Path '%APP_ROOT%\renpy_sdk.zip' -DestinationPath '%APP_ROOT%\renpy_sdk' -Force" >nul
+    )
+)
+
+echo [6/7] Starting backend and local web server...
+call :ensure_backend
+if errorlevel 1 goto :fail
+call :ensure_web_server
+if errorlevel 1 goto :fail
+
+echo [7/7] Opening the workbench...
+start "" "%WEB_URL%"
 
 echo.
-echo 모든 구성 요소가 실행되었습니다.
+echo Workbench is ready.
+echo Browser: %WEB_URL%
+echo Backend: %BACKEND_URL%
+echo.
+echo You only need to enter your API key in the UI.
+exit /b 0
+
+:resolve_python
+where python >nul 2>nul
+if not errorlevel 1 (
+    set "BOOTSTRAP_PYTHON=python"
+    exit /b 0
+)
+
+where py >nul 2>nul
+if not errorlevel 1 (
+    set "BOOTSTRAP_PYTHON=py -3.12"
+    exit /b 0
+)
+
+echo Python was not found. Attempting to install Python 3.12 with winget...
+where winget >nul 2>nul
+if errorlevel 1 (
+    echo winget is not available. Install Python 3.12 manually and run Start.bat again.
+    exit /b 1
+)
+
+winget install -e --id Python.Python.3.12 --accept-package-agreements --accept-source-agreements --disable-interactivity >nul
+
+if exist "%LocalAppData%\Programs\Python\Python312\python.exe" (
+    set "BOOTSTRAP_PYTHON=\"%LocalAppData%\Programs\Python\Python312\python.exe\""
+    exit /b 0
+)
+
+where python >nul 2>nul
+if not errorlevel 1 (
+    set "BOOTSTRAP_PYTHON=python"
+    exit /b 0
+)
+
+where py >nul 2>nul
+if not errorlevel 1 (
+    set "BOOTSTRAP_PYTHON=py -3.12"
+    exit /b 0
+)
+
+echo Python installation did not complete successfully.
+exit /b 1
+
+:ensure_node_runtime
+where node >nul 2>nul
+if not errorlevel 1 goto :node_done
+where npm >nul 2>nul
+if not errorlevel 1 goto :node_done
+
+where winget >nul 2>nul
+if errorlevel 1 (
+    echo Node.js was not found and winget is unavailable. OpenAI OAuth will stay unavailable until Node.js is installed.
+    goto :node_done
+)
+
+echo Installing Node.js LTS for Codex CLI support...
+winget install -e --id OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements --disable-interactivity >nul
+
+:node_done
+exit /b 0
+
+:ensure_backend
+call :wait_url "%BACKEND_URL%" 1
+if not errorlevel 1 exit /b 0
+
+start "RenPy Workbench Backend" /min "%LAUNCH_PY%" "%APP_ROOT%\RBackend.py"
+call :wait_url "%BACKEND_URL%" 45
+if errorlevel 1 (
+    echo Failed to start RenPy Workbench Backend.
+    exit /b 1
+)
+exit /b 0
+
+:ensure_web_server
+call :wait_url "%WEB_URL%" 1
+if not errorlevel 1 exit /b 0
+
+start "RenPy Workbench Web" /min "%VENV_PY%" -m http.server 8765 --bind 127.0.0.1 --directory "%APP_ROOT%"
+call :wait_url "%WEB_URL%" 45
+if errorlevel 1 (
+    echo Failed to start RenPy Workbench Web.
+    exit /b 1
+)
+exit /b 0
+
+:wait_url
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+    "$uri = '%~1'; $deadline = (Get-Date).AddSeconds(%~2); while ((Get-Date) -lt $deadline) { try { $response = Invoke-WebRequest -UseBasicParsing -Uri $uri -TimeoutSec 2; if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 500) { exit 0 } } catch { } Start-Sleep -Milliseconds 500 }; exit 1" >nul
+exit /b %errorlevel%
+
+:fail
+echo.
+echo Launcher failed. Review the messages above and retry.
+pause
+exit /b 1

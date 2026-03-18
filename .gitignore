@@ -195,3 +195,11 @@ cython_debug/
 # Custom translation tools
 /tools/
 /test_publish.py
+/Scripts/
+/pyvenv.cfg
+/renpy_sdk/
+/output/playwright/
+/append_openai_section.py
+/inspect_provider_block.py
+/update_log_message.py
+/docs/generate_custom_screenshots.py
