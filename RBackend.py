@@ -14,12 +14,14 @@ import tempfile
 import time
 from io import BytesIO
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from tkinter import Tk, filedialog
+from urllib.parse import quote_plus
 
 
-REQUIRED_PACKAGES = {"flask", "flask-cors", "google-generativeai", "openai", "pillow"}
+REQUIRED_PACKAGES = {"flask", "flask-cors", "google-generativeai", "google-genai", "openai", "pillow"}
 
 
 def ensure_required_packages() -> None:
@@ -51,12 +53,29 @@ ensure_required_packages()
 from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
 import google.generativeai as genai
-from PIL import Image, ImageFont
+from PIL import Image, ImageDraw, ImageFont
+
+try:
+    import winreg
+except ImportError:
+    winreg = None
 
 try:
     from google.api_core import exceptions as google_exceptions
 except ImportError:
     google_exceptions = None
+
+try:
+    from google import genai as google_genai
+    from google.genai import types as google_genai_types
+except ImportError:
+    google_genai = None
+    google_genai_types = None
+
+try:
+    from google.oauth2 import service_account
+except ImportError:
+    service_account = None
 
 try:
     from openai import OpenAI
@@ -77,13 +96,25 @@ DEFAULT_MODELS = {
     "openai": "gpt-5-mini",
 }
 SUPPORTED_PROVIDERS = set(DEFAULT_MODELS.keys())
+DEFAULT_GEMINI_AUTH_MODE = "api_key"
+SUPPORTED_GEMINI_AUTH_MODES = {"api_key", "vertex_ai"}
 DEFAULT_OPENAI_AUTH_MODE = "api_key"
 SUPPORTED_OPENAI_AUTH_MODES = {"api_key", "oauth_cli"}
+DEFAULT_VERTEX_AI_LOCATION = "global"
+ACTIVE_TRANSLATION_SESSION_STALE_SECONDS = 180
 DEFAULT_CODEX_CLI_COMMAND = f'"{CODEX_NPX_WRAPPER}" {{args}}' if os.name == "nt" else "codex {args}"
 AUTO_CODEX_MODEL_ECONOMY = "auto-codex-economy"
 AUTO_CODEX_MODEL_BALANCED = "auto-codex-balanced"
 DEFAULT_CODEX_OAUTH_MODEL = AUTO_CODEX_MODEL_ECONOMY
 DEFAULT_CODEX_REASONING_EFFORT = "high"
+SUPPORTED_CODEX_OAUTH_MODELS = {
+    AUTO_CODEX_MODEL_ECONOMY,
+    AUTO_CODEX_MODEL_BALANCED,
+    "gpt-5.1-codex",
+    "gpt-5-mini",
+    "gpt-5-codex",
+}
+CHATGPT_UNSUPPORTED_CODEX_MODEL_PREFIXES = ("gpt-5.4",)
 CODEX_OAUTH_ITEM_LIMIT = 96
 CODEX_OAUTH_CHAR_LIMIT = 28000
 CODEX_OAUTH_UI_ITEM_LIMIT = 48
@@ -270,6 +301,7 @@ TRANSLATE_PYTHON_BLOCK_RE = re.compile(
 STYLE_FONT_RE = re.compile(r'^\s*font\s+"(?P<font>[^"]+)"\s*$')
 STYLE_SIZE_RE = re.compile(r"^\s*size\s+(?P<size>-?\d+)\s*$")
 FONT_EXTENSIONS = {".ttf", ".otf", ".ttc", ".otc"}
+DEFAULT_FONT_PREVIEW_TEXT = "가나다라마바사 ABC 123"
 GUI_BASELINE_FONT_KEYS = {
     "dialogue": ("text_font", "default_font"),
     "name": ("name_text_font", "name_font"),
@@ -940,6 +972,231 @@ def build_public_path(game_dir: Path, path_value: Path) -> str:
         except ValueError:
             continue
     return str(normalized).replace("\\", "/")
+
+
+def get_windows_font_roots() -> List[Tuple[str, Path]]:
+    roots: List[Tuple[str, Path]] = []
+    windir = Path(os.environ.get("WINDIR") or "C:/Windows")
+    windows_fonts = windir / "Fonts"
+    if windows_fonts.is_dir():
+        roots.append(("windows", windows_fonts))
+
+    local_font_root = Path(os.environ.get("LOCALAPPDATA") or "") / "Microsoft" / "Windows" / "Fonts"
+    if local_font_root.is_dir():
+        roots.append(("user", local_font_root))
+
+    return roots
+
+
+def clean_font_display_name(value: str) -> str:
+    cleaned = re.sub(r"\s*\((TrueType|OpenType|All Res)\)\s*$", "", str(value or "").strip(), flags=re.IGNORECASE)
+    return cleaned.strip()
+
+
+def probe_font_name(font_path: Path) -> Tuple[str, str]:
+    fallback_name = clean_font_display_name(font_path.stem.replace("_", " "))
+    try:
+        font = ImageFont.truetype(str(font_path), size=28)
+        family_name, style_name = font.getname()
+        return clean_font_display_name(family_name or fallback_name), clean_font_display_name(style_name or "Regular")
+    except Exception:  # noqa: BLE001
+        return fallback_name, "Regular"
+
+
+def build_system_font_entry(font_path: Path, display_name: str, source: str) -> Dict[str, Any]:
+    family_name, style_name = probe_font_name(font_path)
+    cleaned_display_name = clean_font_display_name(display_name or family_name or font_path.stem)
+    font_id = hashlib.sha1(str(font_path.resolve()).lower().encode("utf-8")).hexdigest()[:16]
+    return {
+        "font_id": font_id,
+        "display_name": cleaned_display_name,
+        "family_name": family_name,
+        "style_name": style_name,
+        "file_name": font_path.name,
+        "path": str(font_path.resolve()),
+        "source": source,
+    }
+
+
+@lru_cache(maxsize=1)
+def discover_system_fonts() -> List[Dict[str, Any]]:
+    entries_by_path: Dict[str, Dict[str, Any]] = {}
+    font_roots = {label: path for label, path in get_windows_font_roots()}
+
+    def register_font(font_path: Path, display_name: str, source: str) -> None:
+        if not font_path.is_file() or font_path.suffix.lower() not in FONT_EXTENSIONS:
+            return
+        normalized_path = str(font_path.resolve())
+        if normalized_path in entries_by_path:
+            existing = entries_by_path[normalized_path]
+            if display_name and len(display_name) > len(existing.get("display_name") or ""):
+                existing["display_name"] = clean_font_display_name(display_name)
+            return
+        entries_by_path[normalized_path] = build_system_font_entry(font_path, display_name, source)
+
+    if winreg is not None:
+        registry_sources = [
+            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts", "windows"),
+            (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts", "user"),
+        ]
+        for hive, key_path, source_label in registry_sources:
+            try:
+                with winreg.OpenKey(hive, key_path) as registry_key:
+                    value_count = winreg.QueryInfoKey(registry_key)[1]
+                    for index in range(value_count):
+                        value_name, raw_value, _ = winreg.EnumValue(registry_key, index)
+                        font_value = str(raw_value or "").strip()
+                        if not font_value:
+                            continue
+                        font_path = Path(font_value)
+                        if not font_path.is_absolute():
+                            font_root = font_roots.get(source_label) or font_roots.get("windows")
+                            if font_root is None:
+                                continue
+                            font_path = font_root / font_value
+                        register_font(font_path, value_name, source_label)
+            except OSError:
+                continue
+
+    for source_label, font_root in get_windows_font_roots():
+        for suffix in sorted(FONT_EXTENSIONS):
+            for font_path in sorted(font_root.glob(f"*{suffix}")):
+                register_font(font_path, font_path.stem, source_label)
+
+    return sorted(
+        entries_by_path.values(),
+        key=lambda entry: (
+            str(entry.get("display_name") or "").lower(),
+            str(entry.get("style_name") or "").lower(),
+            str(entry.get("file_name") or "").lower(),
+        ),
+    )
+
+
+def get_system_font_entry(font_id: str) -> Optional[Dict[str, Any]]:
+    normalized_id = str(font_id or "").strip()
+    if not normalized_id:
+        return None
+    for entry in discover_system_fonts():
+        if entry.get("font_id") == normalized_id:
+            return entry
+    return None
+
+
+def resolve_font_preview_path(
+    font_id: str = "",
+    path_value: str = "",
+    font_reference: str = "",
+    game_dir: str = "",
+) -> Optional[Path]:
+    if font_id:
+        font_entry = get_system_font_entry(font_id)
+        if font_entry:
+            font_path = Path(font_entry["path"])
+            return font_path if font_path.is_file() else None
+
+    raw_path = normalize_font_reference(path_value)
+    if raw_path:
+        font_path = Path(raw_path)
+        if font_path.is_file() and font_path.suffix.lower() in FONT_EXTENSIONS:
+            return font_path
+
+    normalized_reference = normalize_font_reference(font_reference)
+    normalized_game_dir = str(game_dir or "").strip()
+    if normalized_reference and normalized_game_dir:
+        try:
+            return resolve_font_path(Path(normalized_game_dir), normalized_reference)
+        except Exception:  # noqa: BLE001
+            return None
+    return None
+
+
+def build_font_preview_image(
+    font_path: Path,
+    preview_text: str,
+    width: int = 640,
+    height: int = 140,
+) -> Image.Image:
+    canvas = Image.new("RGBA", (width, height), (14, 24, 31, 255))
+    draw = ImageDraw.Draw(canvas)
+
+    sample_candidates = []
+    primary_sample = str(preview_text or DEFAULT_FONT_PREVIEW_TEXT).strip() or DEFAULT_FONT_PREVIEW_TEXT
+    for sample in (
+        primary_sample[:120],
+        "Preview Aa Bb 123",
+        "Aa Bb 123",
+        Path(font_path).stem[:32] or "Font",
+    ):
+        if sample and sample not in sample_candidates:
+            sample_candidates.append(sample)
+
+    font = None
+    bbox = None
+    sample_text = sample_candidates[0]
+    horizontal_padding = max(12, int(width * 0.045))
+    vertical_padding = max(10, int(height * 0.12))
+    max_candidate_size = max(28, min(96, int(height * 0.82)))
+    min_candidate_size = 20
+
+    for candidate_text in sample_candidates:
+        for candidate_size in range(max_candidate_size, min_candidate_size - 1, -2):
+            try:
+                candidate_font = ImageFont.truetype(str(font_path), size=candidate_size)
+                candidate_bbox = candidate_font.getbbox(candidate_text)
+                probe_image = Image.new("L", (max(width, 8), max(height, 8)), 0)
+                ImageDraw.Draw(probe_image).text((4, 4), candidate_text, font=candidate_font, fill=255)
+            except Exception:  # noqa: BLE001
+                continue
+            text_width = candidate_bbox[2] - candidate_bbox[0]
+            text_height = candidate_bbox[3] - candidate_bbox[1]
+            if text_width <= width - (horizontal_padding * 2) and text_height <= height - (vertical_padding * 2):
+                font = candidate_font
+                bbox = candidate_bbox
+                sample_text = candidate_text
+                break
+            font = candidate_font
+            bbox = candidate_bbox
+            sample_text = candidate_text
+        if font is not None and bbox is not None:
+            break
+
+    if font is None or bbox is None:
+        raise RuntimeError(f"폰트를 렌더링할 수 없습니다: {font_path}")
+
+    text_width = bbox[2] - bbox[0]
+    text_height = bbox[3] - bbox[1]
+    text_x = horizontal_padding - bbox[0]
+    text_y = max(vertical_padding, int((height - text_height) / 2) - bbox[1])
+
+    draw.rounded_rectangle((0, 0, width - 1, height - 1), radius=20, outline=(54, 73, 81, 255), width=1)
+    draw.text((text_x, text_y), sample_text, font=font, fill=(244, 246, 248, 255))
+    return canvas
+
+
+def plan_publish_font_reference(
+    game_dir_path: Path,
+    publish_root: Path,
+    font_reference: str,
+    planned_assets: Dict[str, str],
+) -> str:
+    normalized_reference = normalize_font_reference(font_reference)
+    if not normalized_reference:
+        return ""
+
+    resolved = resolve_font_path(game_dir_path, normalized_reference)
+    if resolved is None:
+        return normalized_reference
+
+    try:
+        return str(resolved.relative_to(game_dir_path)).replace("\\", "/")
+    except ValueError:
+        safe_stem = re.sub(r"[^A-Za-z0-9._-]+", "_", resolved.stem).strip("._") or "font"
+        hash_suffix = hashlib.sha1(str(resolved.resolve()).lower().encode("utf-8")).hexdigest()[:8]
+        asset_relative_path = f"_workbench_fonts/{safe_stem}_{hash_suffix}{resolved.suffix.lower()}"
+        planned_assets[str(resolved.resolve())] = asset_relative_path
+        publish_relative_root = str(publish_root.relative_to(game_dir_path)).replace("\\", "/")
+        return f"{publish_relative_root}/{asset_relative_path}"
 
 
 def measure_font_signature(font_path: Optional[Path], font_size: Optional[int]) -> Optional[Tuple[float, float]]:
@@ -4264,12 +4521,55 @@ def extract_json_from_text(text: str) -> Dict[str, Any]:
     raise ValueError("JSON 응답을 파싱하지 못했습니다.")
 
 
+def normalize_gemini_auth_mode(provider: str, auth_mode: Optional[str]) -> str:
+    if provider != "gemini":
+        return DEFAULT_GEMINI_AUTH_MODE
+    if auth_mode in SUPPORTED_GEMINI_AUTH_MODES:
+        return str(auth_mode)
+    return DEFAULT_GEMINI_AUTH_MODE
+
+
 def normalize_openai_auth_mode(provider: str, auth_mode: Optional[str]) -> str:
     if provider != "openai":
         return "api_key"
     if auth_mode in SUPPORTED_OPENAI_AUTH_MODES:
         return str(auth_mode)
     return DEFAULT_OPENAI_AUTH_MODE
+
+
+def normalize_vertex_settings(value: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    payload = value if isinstance(value, dict) else {}
+    credentials_json_value = payload.get("credentials_json") or payload.get("service_account_json") or ""
+    if isinstance(credentials_json_value, dict):
+        credentials_json = json.dumps(credentials_json_value, ensure_ascii=False)
+    else:
+        credentials_json = str(credentials_json_value or "").strip()
+    project_id = str(payload.get("project_id") or payload.get("project") or "").strip()
+    if not project_id and credentials_json:
+        try:
+            parsed_credentials = json.loads(credentials_json)
+            if isinstance(parsed_credentials, dict):
+                project_id = str(parsed_credentials.get("project_id") or parsed_credentials.get("project") or "").strip()
+        except json.JSONDecodeError:
+            pass
+    return {
+        "project_id": project_id,
+        "location": str(payload.get("location") or DEFAULT_VERTEX_AI_LOCATION).strip() or DEFAULT_VERTEX_AI_LOCATION,
+        "credentials_path": str(payload.get("credentials_path") or "").strip(),
+        "credentials_json": credentials_json,
+    }
+
+
+def build_vertex_session_descriptor(vertex_settings: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    normalized = normalize_vertex_settings(vertex_settings)
+    return {
+        "project_id": normalized.get("project_id", ""),
+        "location": normalized.get("location", DEFAULT_VERTEX_AI_LOCATION),
+        "credentials_mode": (
+            "json" if normalized.get("credentials_json")
+            else ("path" if normalized.get("credentials_path") else "adc")
+        ),
+    }
 
 
 def normalize_codex_command_template(command_template: Optional[str]) -> str:
@@ -4524,9 +4824,21 @@ def write_json_artifact(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def read_json_artifact(path: Path) -> Dict[str, Any]:
+    if not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def build_translation_session_id(
     documents: List[AnalyzedFile],
     provider: str,
+    gemini_auth_mode: str,
+    vertex_descriptor: Dict[str, str],
     openai_auth_mode: str,
     model_name: str,
     analysis_mode: str,
@@ -4538,6 +4850,8 @@ def build_translation_session_id(
 ) -> str:
     descriptor = {
         "provider": provider,
+        "gemini_auth_mode": gemini_auth_mode,
+        "vertex_descriptor": vertex_descriptor,
         "openai_auth_mode": openai_auth_mode,
         "model_name": model_name,
         "analysis_mode": analysis_mode,
@@ -4563,6 +4877,8 @@ def build_translation_session_id(
 def build_translation_session_runtime(
     documents: List[AnalyzedFile],
     provider: str,
+    gemini_auth_mode: str,
+    vertex_settings: Dict[str, str],
     openai_auth_mode: str,
     model_name: str,
     analysis_mode: str,
@@ -4576,6 +4892,8 @@ def build_translation_session_runtime(
     session_id = build_translation_session_id(
         documents=documents,
         provider=provider,
+        gemini_auth_mode=gemini_auth_mode,
+        vertex_descriptor=build_vertex_session_descriptor(vertex_settings),
         openai_auth_mode=openai_auth_mode,
         model_name=model_name,
         analysis_mode=analysis_mode,
@@ -4627,6 +4945,8 @@ def load_compatible_translation_checkpoint(
     runtime: TranslationSessionRuntime,
     documents: List[AnalyzedFile],
     provider: str,
+    gemini_auth_mode: str,
+    vertex_descriptor: Dict[str, str],
     openai_auth_mode: str,
 ) -> Dict[str, str]:
     direct_checkpoint = load_translation_checkpoint(runtime)
@@ -4655,6 +4975,10 @@ def load_compatible_translation_checkpoint(
             continue
 
         if session_payload.get("provider") != provider:
+            continue
+        if session_payload.get("gemini_auth_mode") != gemini_auth_mode:
+            continue
+        if (session_payload.get("vertex_descriptor") or {}) != vertex_descriptor:
             continue
         if session_payload.get("openai_auth_mode") != openai_auth_mode:
             continue
@@ -4708,6 +5032,7 @@ def persist_translation_session_state(
     status_payload = {
         "session_id": runtime.session_id,
         "updated_at": datetime.datetime.now().isoformat(),
+        "total_item_count": total_items,
         "translated_item_count": len(translated_lookup),
         "resumed_item_count": resumed_item_count,
         "failed_item_count": len(failed_items),
@@ -4740,6 +5065,96 @@ def persist_translation_session_state(
     write_json_artifact(runtime.status_path, status_payload)
 
 
+def build_translation_status_payload(runtime: TranslationSessionRuntime) -> Dict[str, Any]:
+    session_payload = read_json_artifact(runtime.metadata_path)
+    status_payload = read_json_artifact(runtime.status_path)
+
+    total_item_count = try_parse_int(status_payload.get("total_item_count"))
+    if total_item_count is None:
+        total_item_count = try_parse_int(session_payload.get("total_items")) or 0
+
+    translated_item_count = try_parse_int(status_payload.get("translated_item_count")) or 0
+    failed_item_count = try_parse_int(status_payload.get("failed_item_count")) or 0
+    skipped_adult_count = try_parse_int(status_payload.get("skipped_adult_count")) or 0
+    pending_item_count = try_parse_int(status_payload.get("pending_item_count"))
+    if pending_item_count is None:
+        pending_item_count = max(
+            0,
+            total_item_count - translated_item_count - failed_item_count - skipped_adult_count,
+        )
+    completed_item_count = max(
+        0,
+        min(total_item_count, translated_item_count + failed_item_count + skipped_adult_count),
+    )
+    progress_percent = round((completed_item_count / total_item_count) * 100, 2) if total_item_count > 0 else 0.0
+
+    updated_at = str(status_payload.get("updated_at") or session_payload.get("updated_at") or "")
+    stale_seconds = None
+    if updated_at:
+        try:
+            updated_dt = datetime.datetime.fromisoformat(updated_at)
+            stale_seconds = max(0.0, (datetime.datetime.now() - updated_dt).total_seconds())
+        except ValueError:
+            stale_seconds = None
+
+    latest_attempt = {}
+    latest_attempt_name = ""
+    completed_batches = status_payload.get("completed_batches") or []
+    if isinstance(completed_batches, list) and completed_batches:
+        latest_batch = completed_batches[-1]
+        if isinstance(latest_batch, dict):
+            latest_attempt = latest_batch
+            latest_attempt_name = str(latest_batch.get("log_dir") or "").replace("\\", "/").rstrip("/").split("/")[-1]
+    if not latest_attempt and runtime.attempts_dir.is_dir():
+        attempt_dirs = sorted(
+            [child for child in runtime.attempts_dir.iterdir() if child.is_dir() and child.name.startswith("attempt_")],
+            key=lambda child: child.name,
+        )
+        if attempt_dirs:
+            latest_attempt_dir = attempt_dirs[-1]
+            latest_attempt = read_json_artifact(latest_attempt_dir / "meta.json")
+            latest_attempt_name = latest_attempt_dir.name
+
+    current_document = str(status_payload.get("current_document") or "")
+    completed_document_count = len(status_payload.get("completed_documents") or [])
+    halted = bool(status_payload.get("halted"))
+    last_error = str(status_payload.get("last_error") or "")
+    if latest_attempt.get("document_path") and not current_document:
+        current_document = str(latest_attempt.get("document_path") or "")
+
+    return {
+        "session_id": runtime.session_id,
+        "status_path": str(runtime.status_path),
+        "checkpoint_path": str(runtime.checkpoint_path),
+        "attempt_log_dir": str(runtime.attempts_dir),
+        "metadata_path": str(runtime.metadata_path),
+        "analysis_mode": runtime.analysis_mode,
+        "target_language": runtime.target_language,
+        "updated_at": updated_at,
+        "stale_seconds": stale_seconds,
+        "halted": halted,
+        "halt_reason": str(status_payload.get("halt_reason") or ""),
+        "last_error": last_error,
+        "current_document": current_document,
+        "total_item_count": total_item_count,
+        "translated_item_count": translated_item_count,
+        "failed_item_count": failed_item_count,
+        "skipped_adult_count": skipped_adult_count,
+        "pending_item_count": pending_item_count,
+        "completed_item_count": completed_item_count,
+        "completed_batch_count": try_parse_int(status_payload.get("completed_batch_count")) or 0,
+        "failed_batch_count": try_parse_int(status_payload.get("failed_batch_count")) or 0,
+        "completed_document_count": completed_document_count,
+        "resumed_item_count": try_parse_int(status_payload.get("resumed_item_count")) or 0,
+        "passthrough_item_count": try_parse_int(status_payload.get("passthrough_item_count")) or 0,
+        "progress_percent": progress_percent,
+        "latest_attempt_name": latest_attempt_name,
+        "latest_attempt": latest_attempt,
+        "optimization": status_payload.get("optimization") or session_payload.get("optimization") or {},
+        "has_status": runtime.status_path.is_file(),
+    }
+
+
 def begin_translation_attempt_log(
     runtime: TranslationSessionRuntime,
     attempt_index: int,
@@ -4750,8 +5165,10 @@ def begin_translation_attempt_log(
     attempt_dir = runtime.attempts_dir / f"attempt_{attempt_index:04d}"
     attempt_dir.mkdir(parents=True, exist_ok=True)
     write_json_artifact(attempt_dir / "meta.json", metadata)
-    write_text_artifact(attempt_dir / "system_prompt.txt", system_prompt)
-    write_text_artifact(attempt_dir / "user_prompt.txt", user_prompt)
+    if system_prompt:
+        write_text_artifact(attempt_dir / "system_prompt.txt", system_prompt)
+    if user_prompt:
+        write_text_artifact(attempt_dir / "user_prompt.txt", user_prompt)
     return attempt_dir
 
 
@@ -4888,6 +5305,78 @@ def translate_with_gemini(api_key: str, model_name: str, system_prompt: str, use
     raise last_error  # pragma: no cover
 
 
+def extract_text_from_google_genai_sdk_response(response: Any) -> str:
+    text = getattr(response, "text", None)
+    if text:
+        return text
+
+    fragments: List[str] = []
+    for candidate in getattr(response, "candidates", []) or []:
+        content = getattr(candidate, "content", None)
+        for part in getattr(content, "parts", []) or []:
+            part_text = getattr(part, "text", None)
+            if part_text:
+                fragments.append(part_text)
+    return "".join(fragments)
+
+
+def translate_with_vertex_gemini(
+    model_name: str,
+    system_prompt: str,
+    user_prompt: str,
+    vertex_settings: Dict[str, str],
+) -> Dict[str, Any]:
+    if google_genai is None or google_genai_types is None:
+        raise RuntimeError("google-genai 라이브러리를 사용할 수 없습니다.")
+
+    project_id = (vertex_settings.get("project_id") or "").strip()
+    location = (vertex_settings.get("location") or DEFAULT_VERTEX_AI_LOCATION).strip() or DEFAULT_VERTEX_AI_LOCATION
+    credentials_path = (vertex_settings.get("credentials_path") or "").strip()
+    credentials_json = (vertex_settings.get("credentials_json") or "").strip()
+    if not project_id:
+        raise RuntimeError("Vertex AI를 사용하려면 GCP 프로젝트 ID가 필요합니다.")
+
+    client_kwargs: Dict[str, Any] = {
+        "vertexai": True,
+        "project": project_id,
+        "location": location,
+        "http_options": google_genai_types.HttpOptions(api_version="v1"),
+    }
+    if credentials_json:
+        if service_account is None:
+            raise RuntimeError("google-auth 서비스 계정 라이브러리를 사용할 수 없습니다.")
+        try:
+            credentials_info = json.loads(credentials_json)
+        except json.JSONDecodeError as error:
+            raise RuntimeError(f"Vertex AI 서비스 계정 JSON을 해석할 수 없습니다: {error}") from error
+        if not isinstance(credentials_info, dict):
+            raise RuntimeError("Vertex AI 서비스 계정 JSON은 객체 형식이어야 합니다.")
+        client_kwargs["credentials"] = service_account.Credentials.from_service_account_info(
+            credentials_info,
+            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        )
+    elif credentials_path:
+        if service_account is None:
+            raise RuntimeError("google-auth 서비스 계정 라이브러리를 사용할 수 없습니다.")
+        credentials_file = Path(credentials_path)
+        if not credentials_file.is_file():
+            raise RuntimeError(f"Vertex AI 서비스 계정 JSON을 찾을 수 없습니다: {credentials_path}")
+        client_kwargs["credentials"] = service_account.Credentials.from_service_account_file(
+            str(credentials_file),
+            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        )
+
+    client = google_genai.Client(**client_kwargs)
+    response = client.models.generate_content(
+        model=model_name,
+        contents=[system_prompt, user_prompt],
+        config=google_genai_types.GenerateContentConfig(
+            temperature=TRANSLATION_TEMPERATURE,
+        ),
+    )
+    return extract_json_from_text(extract_text_from_google_genai_sdk_response(response))
+
+
 def translate_with_openai(api_key: str, model_name: str, system_prompt: str, user_prompt: str) -> Dict[str, Any]:
     if OpenAI is None:
         raise RuntimeError("openai 라이브러리를 사용할 수 없습니다.")
@@ -4927,12 +5416,21 @@ def perform_translation(
     model_name: str,
     system_prompt: str,
     user_prompt: str,
+    gemini_auth_mode: str = DEFAULT_GEMINI_AUTH_MODE,
+    vertex_settings: Optional[Dict[str, str]] = None,
     openai_auth_mode: str = DEFAULT_OPENAI_AUTH_MODE,
     openai_oauth_command: str = DEFAULT_CODEX_CLI_COMMAND,
     workdir: Optional[str] = None,
     debug_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
     if provider == "gemini":
+        if gemini_auth_mode == "vertex_ai":
+            return translate_with_vertex_gemini(
+                model_name=model_name,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                vertex_settings=normalize_vertex_settings(vertex_settings),
+            )
         return translate_with_gemini(api_key, model_name, system_prompt, user_prompt)
     if provider == "openai":
         if openai_auth_mode == "oauth_cli":
@@ -4946,6 +5444,37 @@ def perform_translation(
             )
         return translate_with_openai(api_key, model_name, system_prompt, user_prompt)
     raise ValueError(f"지원하지 않는 공급자입니다: {provider}")
+
+
+def build_translation_lookup_from_response(
+    response_payload: Optional[Dict[str, Any]],
+    item_batch: List[TranslationItem],
+) -> Dict[str, str]:
+    translations = (response_payload or {}).get("translations")
+    if not isinstance(translations, list):
+        return {}
+
+    id_map = {str(index): item.item_id for index, item in enumerate(item_batch)}
+    lookup: Dict[str, str] = {}
+    for entry in translations:
+        if not isinstance(entry, dict):
+            continue
+
+        item_id = entry.get("id")
+        text = entry.get("text")
+        if isinstance(item_id, str) and isinstance(text, str) and item_id:
+            lookup[item_id] = text
+            continue
+
+        raw_index = entry.get("i")
+        indexed_text = entry.get("t")
+        if raw_index is None or not isinstance(indexed_text, str):
+            continue
+
+        resolved_item_id = id_map.get(str(raw_index))
+        if resolved_item_id:
+            lookup[resolved_item_id] = indexed_text
+    return lookup
 
 
 def chunk_items(items: List[TranslationItem], batch_size: int) -> List[List[TranslationItem]]:
@@ -5062,13 +5591,34 @@ def is_unsupported_model_error(error_text: str) -> bool:
     return any(pattern in lowered for pattern in UNSUPPORTED_MODEL_ERROR_PATTERNS)
 
 
+def normalize_codex_oauth_requested_model(model_name: str) -> Tuple[str, str]:
+    normalized_model = (model_name or DEFAULT_CODEX_OAUTH_MODEL).strip() or DEFAULT_CODEX_OAUTH_MODEL
+    if normalized_model in SUPPORTED_CODEX_OAUTH_MODELS:
+        return normalized_model, ""
+
+    lowered = normalized_model.lower()
+    if lowered.startswith(CHATGPT_UNSUPPORTED_CODEX_MODEL_PREFIXES):
+        fallback_model = "gpt-5.1-codex"
+        warning = (
+            f"The '{normalized_model}' model is not supported when using Codex with a ChatGPT account. "
+            f"Falling back to '{fallback_model}'."
+        )
+        return fallback_model, warning
+
+    warning = (
+        f"The '{normalized_model}' model is not supported by Codex OAuth in this app. "
+        f"Falling back to '{DEFAULT_CODEX_OAUTH_MODEL}'."
+    )
+    return DEFAULT_CODEX_OAUTH_MODEL, warning
+
+
 def choose_codex_oauth_model(
     requested_model: str,
     item_batch: List[TranslationItem],
     depth: int,
     unsupported_models: Set[str],
 ) -> Tuple[str, str]:
-    normalized_model = (requested_model or DEFAULT_CODEX_OAUTH_MODEL).strip() or DEFAULT_CODEX_OAUTH_MODEL
+    normalized_model, _ = normalize_codex_oauth_requested_model(requested_model)
     batch_profile = classify_translation_batch(item_batch)
     if normalized_model not in {AUTO_CODEX_MODEL_ECONOMY, AUTO_CODEX_MODEL_BALANCED}:
         return normalized_model, "manual"
@@ -5183,6 +5733,8 @@ def translate_documents(
     provider: str,
     api_key: str,
     model_name: str,
+    gemini_auth_mode: str,
+    vertex_settings: Dict[str, str],
     character_profiles: Dict[str, Any],
     world_settings: Dict[str, Any],
     character_registry: Dict[str, Dict[str, Any]],
@@ -5197,7 +5749,14 @@ def translate_documents(
     translation_scope: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     translated_lookup: Dict[str, str] = (
-        load_compatible_translation_checkpoint(runtime, documents, provider, openai_auth_mode)
+        load_compatible_translation_checkpoint(
+            runtime,
+            documents,
+            provider,
+            gemini_auth_mode,
+            build_vertex_session_descriptor(vertex_settings),
+            openai_auth_mode,
+        )
         if runtime
         else {}
     )
@@ -5276,6 +5835,8 @@ def translate_documents(
             {
                 "session_id": runtime.session_id,
                 "provider": provider,
+                "gemini_auth_mode": gemini_auth_mode,
+                "vertex_descriptor": build_vertex_session_descriptor(vertex_settings),
                 "openai_auth_mode": openai_auth_mode,
                 "model_name": model_name,
                 "analysis_mode": runtime.analysis_mode,
@@ -5349,22 +5910,8 @@ def translate_documents(
         if not working_batch:
             return
 
-        prompts = build_batch_prompts(
-            item_batch=working_batch,
-            world_settings=world_settings,
-            character_profiles=character_profiles,
-            character_registry=character_registry,
-            include_adult_content=include_adult_content,
-        )
         actual_model_name = model_name
         model_strategy = "fixed"
-        if provider == "openai" and openai_auth_mode == "oauth_cli":
-            actual_model_name, model_strategy = choose_codex_oauth_model(
-                requested_model=model_name,
-                item_batch=working_batch,
-                depth=depth,
-                unsupported_models=unsupported_oauth_models,
-            )
         batch_profile = classify_translation_batch(working_batch)
         attempt_index += 1
         attempt_meta = {
@@ -5384,7 +5931,7 @@ def translate_documents(
             "batch_profile": batch_profile,
             "started_at": datetime.datetime.now().isoformat(),
         }
-        attempt_dir = begin_translation_attempt_log(runtime, attempt_index, attempt_meta, prompts["system_prompt"], prompts["user_prompt"]) if runtime else None
+        attempt_dir = begin_translation_attempt_log(runtime, attempt_index, attempt_meta, "", "") if runtime else None
 
         log_message(
             f"[{provider}] 배치 번역 시작: {len(working_batch)}개 항목 (model={actual_model_name}, depth={depth}, file={document.file_relative_path})",
@@ -5392,12 +5939,39 @@ def translate_documents(
         )
 
         try:
+            prompts = build_batch_prompts(
+                item_batch=working_batch,
+                world_settings=world_settings,
+                character_profiles=character_profiles,
+                character_registry=character_registry,
+                include_adult_content=include_adult_content,
+            )
+            if provider == "openai" and openai_auth_mode == "oauth_cli":
+                actual_model_name, model_strategy = choose_codex_oauth_model(
+                    requested_model=model_name,
+                    item_batch=working_batch,
+                    depth=depth,
+                    unsupported_models=unsupported_oauth_models,
+                )
+                attempt_meta["model_name"] = actual_model_name
+                attempt_meta["model_strategy"] = model_strategy
+            if attempt_dir:
+                write_json_artifact(attempt_dir / "meta.json", attempt_meta)
+                write_text_artifact(attempt_dir / "system_prompt.txt", prompts["system_prompt"])
+                write_text_artifact(attempt_dir / "user_prompt.txt", prompts["user_prompt"])
+
+            log_message(
+                f"[{provider}] 諛곗튂 踰덉뿭 ?쒖옉: {len(working_batch)}媛???ぉ (model={actual_model_name}, depth={depth}, file={document.file_relative_path})",
+                working_batch[0].file_relative_path if working_batch else "batch",
+            )
             response_payload = perform_translation(
                 provider=provider,
                 api_key=api_key,
                 model_name=actual_model_name,
                 system_prompt=prompts["system_prompt"],
                 user_prompt=prompts["user_prompt"],
+                gemini_auth_mode=gemini_auth_mode,
+                vertex_settings=vertex_settings,
                 openai_auth_mode=openai_auth_mode,
                 openai_oauth_command=openai_oauth_command,
                 workdir=workdir,
@@ -5949,15 +6523,18 @@ def build_publish_font_plan(
     game_dir_path: Path,
     gui_baseline: Dict[str, Any],
     publish_settings: Dict[str, Any],
+    publish_root: Path,
 ) -> Dict[str, Any]:
     font_defaults = gui_baseline.get("font_defaults") or {}
     size_defaults = gui_baseline.get("size_defaults") or {}
+    planned_font_assets: Dict[str, str] = {}
     plan = {
         "language_code": publish_settings["language_code"],
         "display_name": publish_settings["display_name"],
         "gui_language": publish_settings["gui_language"],
         "auto_adjust_sizes": publish_settings["auto_adjust_sizes"],
         "fonts": {},
+        "font_assets": [],
         "sizes": {},
         "style_overrides": [],
         "missing_fonts": [],
@@ -5982,7 +6559,16 @@ def build_publish_font_plan(
     for category, setting_key in category_key_map.items():
         baseline_reference = normalize_font_reference(font_defaults.get(category) or "")
         selected_reference = normalize_font_reference(publish_settings.get(setting_key) or "")
-        plan["fonts"][category] = build_public_font_reference(game_dir_path, selected_reference) if selected_reference else ""
+        plan["fonts"][category] = (
+            plan_publish_font_reference(
+                game_dir_path=game_dir_path,
+                publish_root=publish_root,
+                font_reference=selected_reference,
+                planned_assets=planned_font_assets,
+            )
+            if selected_reference
+            else ""
+        )
         if selected_reference and resolve_font_path(game_dir_path, selected_reference) is None:
             plan["missing_fonts"].append(selected_reference)
 
@@ -6018,13 +6604,29 @@ def build_publish_font_plan(
     for entry in publish_settings["extra_style_overrides"]:
         style_override = {
             "style_name": entry["style_name"],
-            "font_path": build_public_font_reference(game_dir_path, entry["font_path"]) if entry.get("font_path") else "",
+            "font_path": (
+                plan_publish_font_reference(
+                    game_dir_path=game_dir_path,
+                    publish_root=publish_root,
+                    font_reference=entry["font_path"],
+                    planned_assets=planned_font_assets,
+                )
+                if entry.get("font_path")
+                else ""
+            ),
             "size": try_parse_int(entry.get("size")),
         }
         if entry.get("font_path") and resolve_font_path(game_dir_path, entry["font_path"]) is None:
             plan["missing_fonts"].append(entry["font_path"])
         plan["style_overrides"].append(style_override)
 
+    plan["font_assets"] = [
+        {
+            "source_path": source_path,
+            "relative_path": relative_path,
+        }
+        for source_path, relative_path in sorted(planned_font_assets.items())
+    ]
     plan["missing_fonts"] = sorted(dict.fromkeys(plan["missing_fonts"]))
     return plan
 
@@ -6197,6 +6799,7 @@ def prepare_translation_output_context(
         "missing_fonts": [],
         "size_plan": {},
         "font_plan": {},
+        "font_assets": [],
     }
     publish_root: Optional[Path] = None
     publish_plan: Optional[Dict[str, Any]] = None
@@ -6208,6 +6811,7 @@ def prepare_translation_output_context(
             game_dir_path=game_dir_path,
             gui_baseline=gui_baseline,
             publish_settings=normalized_publish_settings,
+            publish_root=publish_root,
         )
         publish_bundle.update(
             {
@@ -6216,6 +6820,7 @@ def prepare_translation_output_context(
                 "missing_fonts": publish_plan["missing_fonts"],
                 "size_plan": publish_plan["sizes"],
                 "font_plan": publish_plan["fonts"],
+                "font_assets": publish_plan.get("font_assets") or [],
             }
         )
     elif analysis_mode != "translation_layer":
@@ -6309,6 +6914,17 @@ def sync_translation_support_files(
 
     publish_bundle = dict(output_context.publish_bundle)
     if output_context.publish_root is not None and output_context.publish_plan is not None:
+        copied_font_assets: List[str] = []
+        for asset in output_context.publish_plan.get("font_assets") or []:
+            source_path = Path(asset.get("source_path") or "")
+            relative_path = str(asset.get("relative_path") or "").strip()
+            if not source_path.is_file() or not relative_path:
+                continue
+            destination_path = output_context.publish_root / relative_path
+            destination_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_path, destination_path)
+            copied_font_assets.append(relative_path.replace("\\", "/"))
+
         config_path = output_context.publish_root / "zz_workbench_language_config.rpy"
         config_path.write_text(build_publish_config_content(output_context.publish_plan), encoding="utf-8")
         invalidate_compiled_translation_file(config_path)
@@ -6340,6 +6956,7 @@ def sync_translation_support_files(
                 "config_path": build_public_path(output_context.game_dir_path, config_path),
                 "manifest_path": build_public_path(output_context.game_dir_path, manifest_path),
                 "notes_path": build_public_path(output_context.game_dir_path, notes_path),
+                "font_assets": copied_font_assets,
             }
         )
 
@@ -6477,6 +7094,61 @@ def build_generate_files_response(payload: Dict[str, Any]) -> List[Dict[str, Any
 @app.route("/health")
 def health_check() -> Dict[str, str]:
     return jsonify({"status": "ok"})
+
+
+@app.route("/system_fonts")
+def list_system_fonts() -> Any:
+    fonts = discover_system_fonts()
+    preview_text = (request.args.get("sample") or "").strip() or DEFAULT_FONT_PREVIEW_TEXT
+    payload = []
+    for entry in fonts:
+        payload.append(
+            {
+                **entry,
+                "preview_url": f"/font_preview?font_id={entry['font_id']}&sample={quote_plus(preview_text)}",
+            }
+        )
+    return jsonify({"font_count": len(payload), "fonts": payload})
+
+
+@app.route("/font_preview")
+def font_preview() -> Any:
+    font_id = (request.args.get("font_id") or "").strip()
+    path_value = (request.args.get("path") or "").strip()
+    font_reference = (request.args.get("font_reference") or "").strip()
+    game_dir = (request.args.get("game_dir") or "").strip()
+    preview_text = (request.args.get("sample") or "").strip() or DEFAULT_FONT_PREVIEW_TEXT
+
+    font_path = resolve_font_preview_path(
+        font_id=font_id,
+        path_value=path_value,
+        font_reference=font_reference,
+        game_dir=game_dir,
+    )
+    if font_path is None:
+        return jsonify({"error": "폰트 파일을 찾을 수 없습니다."}), 404
+
+    try:
+        width = int(request.args.get("width") or 640)
+    except ValueError:
+        width = 640
+    try:
+        height = int(request.args.get("height") or 140)
+    except ValueError:
+        height = 140
+
+    width = max(280, min(width, 1024))
+    height = max(84, min(height, 320))
+
+    try:
+        preview_image = build_font_preview_image(font_path, preview_text=preview_text, width=width, height=height)
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": f"폰트 미리보기 생성 실패: {exc}"}), 500
+
+    image_buffer = BytesIO()
+    preview_image.save(image_buffer, format="PNG")
+    image_buffer.seek(0)
+    return send_file(image_buffer, mimetype="image/png", max_age=3600)
 
 
 @app.route("/asset_thumbnail")
@@ -6739,6 +7411,371 @@ def repair_translation_outputs() -> Any:
     )
 
 
+@app.route("/apply_publish_fonts", methods=["POST"])
+def apply_publish_fonts() -> Any:
+    data = request.get_json(force=True) or {}
+    game_exe_path = data.get("game_exe_path") or game_exe_path_from_startup
+    target_language = data.get("target_language") or DEFAULT_TARGET_LANGUAGE
+    analysis_mode = str(data.get("analysis_mode") or "translation_layer").strip() or "translation_layer"
+    publish_settings = data.get("publish_settings") or {}
+
+    if not game_exe_path:
+        return jsonify({"error": "game_exe_path가 비어 있습니다."}), 400
+
+    game_dir_str = find_game_directory(game_exe_path)
+    if not game_dir_str:
+        return jsonify({"error": "선택한 경로에서 'game' 폴더를 찾지 못했습니다."}), 400
+
+    if analysis_mode != "translation_layer":
+        return jsonify({"error": "폰트만 재적용은 Ren'Py game/tl publish bundle 모드에서만 지원됩니다."}), 400
+
+    output_context = prepare_translation_output_context(
+        game_dir=game_dir_str,
+        analysis_mode=analysis_mode,
+        target_language=target_language,
+        publish_settings=publish_settings,
+    )
+    sync_payload = sync_translation_support_files(
+        documents=[],
+        skipped_adult_items=[],
+        failed_items=[],
+        output_context=output_context,
+    )
+    publish_bundle = sync_payload["publish_bundle"]
+    return jsonify(
+        {
+            "status": "success",
+            "analysis_mode": analysis_mode,
+            "target_language": normalize_language_code(target_language),
+            "game_dir": game_dir_str,
+            "adult_review_path": sync_payload["adult_review_path"],
+            "publish_bundle": publish_bundle,
+            "font_asset_count": len(publish_bundle.get("font_assets") or []),
+        }
+    )
+
+
+def build_session_runtime_from_id(
+    *,
+    session_id: str,
+    analysis_mode: str,
+    target_language: str,
+    game_dir: Optional[str] = None,
+) -> TranslationSessionRuntime:
+    normalized_analysis_mode = str(analysis_mode or "translation_layer").strip() or "translation_layer"
+    normalized_target_language = normalize_language_code(target_language or DEFAULT_TARGET_LANGUAGE)
+    if game_dir:
+        session_dir = Path(game_dir) / TRANSLATION_LOG_DIRNAME / normalized_analysis_mode / normalized_target_language / session_id
+        runtime_game_dir = Path(game_dir)
+    else:
+        session_dir = UPLOADED_TRANSLATION_RUN_ROOT / normalized_analysis_mode / normalized_target_language / session_id
+        runtime_game_dir = None
+    return TranslationSessionRuntime(
+        session_id=session_id,
+        session_dir=session_dir,
+        attempts_dir=session_dir / "attempts",
+        checkpoint_path=session_dir / "checkpoint.json",
+        status_path=session_dir / "status.json",
+        metadata_path=session_dir / "session.json",
+        game_dir=runtime_game_dir,
+        analysis_mode=normalized_analysis_mode,
+        target_language=normalized_target_language,
+    )
+
+
+def normalize_translation_scope_for_matching(scope: Any) -> Dict[str, Any]:
+    payload = dict(scope) if isinstance(scope, dict) else {}
+    normalized: Dict[str, Any] = {}
+    for key, value in payload.items():
+        if key in {"selected_speaker_ids", "selected_speaker_names", "selected_item_ids", "selected_files", "documents"}:
+            if isinstance(value, list):
+                normalized[key] = sorted(str(item) for item in value if str(item or "").strip())
+            else:
+                normalized[key] = []
+        elif isinstance(value, bool):
+            normalized[key] = value
+        elif value is None:
+            normalized[key] = ""
+        else:
+            normalized[key] = str(value) if isinstance(value, (int, float)) else value
+    return normalized
+
+
+def parse_iso_datetime(value: Any) -> datetime.datetime:
+    try:
+        return datetime.datetime.fromisoformat(str(value or "").strip())
+    except Exception:  # noqa: BLE001
+        return datetime.datetime.min
+
+
+def score_translation_session_match(
+    session_payload: Dict[str, Any],
+    *,
+    provider: str,
+    gemini_auth_mode: str,
+    vertex_descriptor: Dict[str, str],
+    openai_auth_mode: str,
+    model_name: str,
+    requested_scope: Dict[str, Any],
+    requested_documents: Set[str],
+) -> int:
+    score = 0
+    if session_payload.get("provider") == provider:
+        score += 30
+    if session_payload.get("gemini_auth_mode") == gemini_auth_mode:
+        score += 10
+    if (session_payload.get("vertex_descriptor") or {}) == vertex_descriptor:
+        score += 10
+    if session_payload.get("openai_auth_mode") == openai_auth_mode:
+        score += 10
+    if session_payload.get("model_name") == model_name:
+        score += 25
+
+    session_scope = normalize_translation_scope_for_matching(session_payload.get("translation_scope") or {})
+    if session_scope == requested_scope:
+        score += 40
+    elif session_scope.get("mode") == requested_scope.get("mode"):
+        score += 10
+
+    session_documents = {
+        str(path or "").strip()
+        for path in (session_payload.get("documents") or [])
+        if str(path or "").strip()
+    }
+    if requested_documents and session_documents:
+        if session_documents == requested_documents:
+            score += 30
+        else:
+            overlap = len(session_documents & requested_documents)
+            score += min(20, overlap * 2)
+    return score
+
+
+def find_best_translation_session(
+    *,
+    game_dir: Path,
+    analysis_mode: str,
+    target_language: str,
+    provider: str,
+    gemini_auth_mode: str,
+    vertex_settings: Dict[str, str],
+    openai_auth_mode: str,
+    model_name: str,
+    requested_scope: Dict[str, Any],
+    requested_documents: Set[str],
+) -> Optional[Dict[str, Any]]:
+    session_root = game_dir / TRANSLATION_LOG_DIRNAME / analysis_mode / target_language
+    if not session_root.is_dir():
+        return None
+
+    normalized_scope = normalize_translation_scope_for_matching(requested_scope)
+    vertex_descriptor = build_vertex_session_descriptor(vertex_settings)
+    candidates: List[Tuple[Tuple[int, datetime.datetime, int], Dict[str, Any]]] = []
+    now = datetime.datetime.now()
+
+    for session_dir in session_root.iterdir():
+        if not session_dir.is_dir():
+            continue
+        metadata_path = session_dir / "session.json"
+        status_path = session_dir / "status.json"
+        if not metadata_path.is_file() or not status_path.is_file():
+            continue
+
+        session_payload = read_json_artifact(metadata_path)
+        status_payload = read_json_artifact(status_path)
+        if not session_payload or not status_payload:
+            continue
+
+        pending_item_count = try_parse_int(status_payload.get("pending_item_count")) or 0
+        halted = bool(status_payload.get("halted"))
+        active = pending_item_count > 0 and not halted
+        updated_at = parse_iso_datetime(status_payload.get("updated_at"))
+        if updated_at is datetime.datetime.min:
+            active = False
+        elif active and (now - updated_at).total_seconds() > ACTIVE_TRANSLATION_SESSION_STALE_SECONDS:
+            active = False
+        match_score = score_translation_session_match(
+            session_payload,
+            provider=provider,
+            gemini_auth_mode=gemini_auth_mode,
+            vertex_descriptor=vertex_descriptor,
+            openai_auth_mode=openai_auth_mode,
+            model_name=model_name,
+            requested_scope=normalized_scope,
+            requested_documents=requested_documents,
+        )
+        candidates.append(
+            (
+                (1 if active else 0, updated_at, match_score),
+                {
+                    "session_id": session_dir.name,
+                    "session_payload": session_payload,
+                    "status_payload": status_payload,
+                    "active": active,
+                    "match_score": match_score,
+                },
+            )
+        )
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return candidates[0][1]
+
+
+@app.route("/resolve_translation_session", methods=["POST"])
+def resolve_translation_session() -> Any:
+    data = request.get_json(force=True) or {}
+    provider = (data.get("provider") or "gemini").lower()
+    gemini_auth_mode = normalize_gemini_auth_mode(provider, data.get("gemini_auth_mode"))
+    vertex_settings = normalize_vertex_settings(data.get("vertex_settings"))
+    openai_auth_mode = normalize_openai_auth_mode(provider, data.get("openai_auth_mode"))
+    model_name = data.get("model_name") or (
+        DEFAULT_CODEX_OAUTH_MODEL if provider == "openai" and openai_auth_mode == "oauth_cli" else DEFAULT_MODELS[provider]
+    )
+    if provider == "openai" and openai_auth_mode == "oauth_cli":
+        model_name, _ = normalize_codex_oauth_requested_model(model_name)
+
+    try:
+        translation_inputs = get_documents_for_translation(data)
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": str(exc)}), 400
+
+    documents = translation_inputs.get("documents") or []
+    if not documents:
+        return jsonify(
+            {
+                "error": "踰덉뿭 ???뚯씪??媛 議댁옱?섏? ?딆뒿?덈떎.",
+                "translation_scope": translation_inputs.get("translation_scope") or {},
+            }
+        ), 400
+
+    runtime = build_translation_session_runtime(
+        documents=documents,
+        provider=provider,
+        gemini_auth_mode=gemini_auth_mode,
+        vertex_settings=vertex_settings,
+        openai_auth_mode=openai_auth_mode,
+        model_name=model_name,
+        analysis_mode=translation_inputs["analysis_mode"],
+        target_language=translation_inputs["target_language"],
+        include_adult_content=bool(data.get("include_adult_content")),
+        world_settings=data.get("world_settings") or {},
+        character_profiles=data.get("character_profiles") or {},
+        game_dir=translation_inputs.get("game_dir"),
+        translation_scope=translation_inputs.get("translation_scope"),
+    )
+    status_payload = build_translation_status_payload(runtime)
+    return jsonify(
+        {
+            "session_id": runtime.session_id,
+            "analysis_mode": runtime.analysis_mode,
+            "target_language": runtime.target_language,
+            "status_path": str(runtime.status_path),
+            "checkpoint_path": str(runtime.checkpoint_path),
+            "translation_log_dir": str(runtime.attempts_dir),
+            "document_count": len(documents),
+            "translation_scope": translation_inputs.get("translation_scope") or {},
+            "status": status_payload,
+        }
+    )
+
+
+@app.route("/find_active_translation_session", methods=["POST"])
+def find_active_translation_session() -> Any:
+    data = request.get_json(force=True) or {}
+    game_exe_path = str(data.get("game_exe_path") or "").strip()
+    if not game_exe_path:
+        return jsonify({"error": "game_exe_path가 필요합니다."}), 400
+
+    game_dir_str = find_game_directory(game_exe_path)
+    if not game_dir_str:
+        return jsonify({"error": "'game' 폴더를 찾지 못했습니다."}), 400
+
+    provider = (data.get("provider") or "gemini").lower()
+    gemini_auth_mode = normalize_gemini_auth_mode(provider, data.get("gemini_auth_mode"))
+    vertex_settings = normalize_vertex_settings(data.get("vertex_settings"))
+    openai_auth_mode = normalize_openai_auth_mode(provider, data.get("openai_auth_mode"))
+    model_name = data.get("model_name") or (
+        DEFAULT_CODEX_OAUTH_MODEL if provider == "openai" and openai_auth_mode == "oauth_cli" else DEFAULT_MODELS[provider]
+    )
+    if provider == "openai" and openai_auth_mode == "oauth_cli":
+        model_name, _ = normalize_codex_oauth_requested_model(model_name)
+
+    analysis_mode = str(data.get("analysis_mode") or "translation_layer").strip() or "translation_layer"
+    target_language = normalize_language_code(data.get("target_language") or DEFAULT_TARGET_LANGUAGE)
+    requested_scope = data.get("translation_scope") or {}
+    requested_documents = {
+        str(path or "").strip()
+        for path in (data.get("selected_files") or [])
+        if str(path or "").strip()
+    }
+
+    best_match = find_best_translation_session(
+        game_dir=Path(game_dir_str),
+        analysis_mode=analysis_mode,
+        target_language=target_language,
+        provider=provider,
+        gemini_auth_mode=gemini_auth_mode,
+        vertex_settings=vertex_settings,
+        openai_auth_mode=openai_auth_mode,
+        model_name=model_name,
+        requested_scope=requested_scope,
+        requested_documents=requested_documents,
+    )
+    if not best_match:
+        return jsonify({"error": "진행 중이거나 최근에 갱신된 번역 세션을 찾지 못했습니다."}), 404
+
+    runtime = build_session_runtime_from_id(
+        session_id=best_match["session_id"],
+        analysis_mode=analysis_mode,
+        target_language=target_language,
+        game_dir=game_dir_str,
+    )
+    status_payload = build_translation_status_payload(runtime)
+    return jsonify(
+        {
+            "session_id": runtime.session_id,
+            "analysis_mode": runtime.analysis_mode,
+            "target_language": runtime.target_language,
+            "status_path": str(runtime.status_path),
+            "checkpoint_path": str(runtime.checkpoint_path),
+            "translation_log_dir": str(runtime.attempts_dir),
+            "translation_scope": best_match["session_payload"].get("translation_scope") or {},
+            "status": status_payload,
+            "active": bool(best_match.get("active")),
+            "match_score": int(best_match.get("match_score") or 0),
+            "matched_documents": best_match["session_payload"].get("documents") or [],
+        }
+    )
+
+
+@app.route("/translation_status", methods=["POST"])
+def translation_status() -> Any:
+    data = request.get_json(force=True) or {}
+    session_id = str(data.get("session_id") or "").strip()
+    if not session_id:
+        return jsonify({"error": "session_id媛 ?꾩슂?⑸땲??"}), 400
+
+    analysis_mode = str(data.get("analysis_mode") or "translation_layer").strip() or "translation_layer"
+    target_language = normalize_language_code(data.get("target_language") or DEFAULT_TARGET_LANGUAGE)
+    game_dir: Optional[str] = None
+    game_exe_path = str(data.get("game_exe_path") or "").strip()
+    if game_exe_path:
+        game_dir = find_game_directory(game_exe_path)
+        if not game_dir:
+            return jsonify({"error": "'game' ?대뜑瑜?李얠? 紐삵뻽?듬땲??"}), 400
+
+    runtime = build_session_runtime_from_id(
+        session_id=session_id,
+        analysis_mode=analysis_mode,
+        target_language=target_language,
+        game_dir=game_dir,
+    )
+    return jsonify(build_translation_status_payload(runtime))
+
+
 @app.route("/generate_files_for_translation", methods=["POST"])
 def handle_generate_files() -> Any:
     log_message("'/generate_files_for_translation' 요청 수신")
@@ -6781,34 +7818,46 @@ def openai_oauth_setup() -> Any:
 
 @app.route("/preview_character_tone", methods=["POST"])
 def preview_character_tone() -> Any:
-    log_message("'/preview_character_tone' 요청 수신")
+    log_message("'/preview_character_tone' ?? ??")
     data = request.get_json(force=True) or {}
     provider = (data.get("provider") or "gemini").lower()
+    gemini_auth_mode = normalize_gemini_auth_mode(provider, data.get("gemini_auth_mode"))
+    vertex_settings = normalize_vertex_settings(data.get("vertex_settings"))
     openai_auth_mode = normalize_openai_auth_mode(provider, data.get("openai_auth_mode"))
     openai_oauth_command = (data.get("openai_oauth_command") or DEFAULT_CODEX_CLI_COMMAND).strip()
     if provider not in SUPPORTED_PROVIDERS:
-        return jsonify({"error": f"지원하지 않는 공급자입니다: {provider}"}), 400
+        return jsonify({"error": f"???? ?? ??????: {provider}"}), 400
     if provider == "openai" and openai_auth_mode == "api_key" and OpenAI is None:
-        return jsonify({"error": "OpenAI 라이브러리를 로드하지 못했습니다."}), 500
-    if provider == "gemini" and genai is None:
-        return jsonify({"error": "Google Generative AI 라이브러리를 로드하지 못했습니다."}), 500
+        return jsonify({"error": "OpenAI ?????? ???? ?????."}), 500
+    if provider == "gemini" and gemini_auth_mode == "api_key" and genai is None:
+        return jsonify({"error": "Google Generative AI ?????? ???? ?????."}), 500
+    if provider == "gemini" and gemini_auth_mode == "vertex_ai" and google_genai is None:
+        return jsonify({"error": "google-genai ?????? ???? ?????."}), 500
 
     api_key = (data.get("api_key") or os.environ.get("OPENAI_API_KEY") or os.environ.get("GEMINI_API_KEY") or "").strip()
-    if provider == "gemini" and not api_key:
-        return jsonify({"error": "API 키가 제공되지 않았습니다."}), 400
+    if provider == "gemini" and gemini_auth_mode == "api_key" and not api_key:
+        return jsonify({"error": "API ?? ???? ?????."}), 400
+    if provider == "gemini" and gemini_auth_mode == "vertex_ai" and not vertex_settings.get("project_id"):
+        return jsonify({"error": "Vertex AI? ????? GCP ???? ID? ?????."}), 400
     if provider == "openai" and openai_auth_mode == "api_key" and not api_key:
-        return jsonify({"error": "API 키가 제공되지 않았습니다."}), 400
+        return jsonify({"error": "API ?? ???? ?????."}), 400
 
     speaker_id = (data.get("speaker_id") or "").strip()
     speaker_name = (data.get("speaker_name") or speaker_id or "Character").strip()
     sample_lines = [line for line in (data.get("sample_lines") or []) if (line or "").strip()]
     if not speaker_id or not sample_lines:
-        return jsonify({"error": "샘플 대사 프리뷰에 필요한 화자 또는 샘플 대사가 없습니다."}), 400
+        return jsonify({"error": "?? ???? ??? ?? ?? ?? ??? ????."}), 400
 
-    model_name = data.get("model_name") or (DEFAULT_CODEX_OAUTH_MODEL if provider == "openai" and openai_auth_mode == "oauth_cli" else DEFAULT_MODELS[provider])
+    model_name = data.get("model_name") or (
+        DEFAULT_CODEX_OAUTH_MODEL if provider == "openai" and openai_auth_mode == "oauth_cli" else DEFAULT_MODELS[provider]
+    )
+    model_warning = ""
+    if provider == "openai" and openai_auth_mode == "oauth_cli":
+        model_name, model_warning = normalize_codex_oauth_requested_model(model_name)
+        if model_warning:
+            log_message(f"Codex OAuth model normalized: {model_warning}")
     world_settings = data.get("world_settings") or {}
     character_profiles = data.get("character_profiles") or {}
-    target_language = data.get("target_language") or DEFAULT_TARGET_LANGUAGE
 
     profile = character_profiles.get(speaker_id) or {
         "display_name": speaker_name,
@@ -6816,7 +7865,7 @@ def preview_character_tone() -> Any:
     character_profiles = {
         DEFAULT_FALLBACK_PERSONA_KEY: character_profiles.get(DEFAULT_FALLBACK_PERSONA_KEY) or {
             "display_name": "Default",
-            "role": "UI/선택지/고정 문자열",
+            "role": "UI/???/?? ???",
             "tone_preset_id": "ui_clean",
             "tone": CHARACTER_TONE_PRESETS["ui_clean"]["suggested_tone"],
             "notes": CHARACTER_TONE_PRESETS["ui_clean"]["suggested_notes"],
@@ -6849,6 +7898,8 @@ def preview_character_tone() -> Any:
             model_name=model_name,
             system_prompt=prompts["system_prompt"],
             user_prompt=prompts["user_prompt"],
+            gemini_auth_mode=gemini_auth_mode,
+            vertex_settings=vertex_settings,
             openai_auth_mode=openai_auth_mode,
             openai_oauth_command=openai_oauth_command,
             workdir=os.getcwd(),
@@ -6856,11 +7907,11 @@ def preview_character_tone() -> Any:
     except Exception as exc:  # noqa: BLE001
         return jsonify({"error": str(exc)}), 500
 
-    translated_lookup = {
-        entry.get("id"): entry.get("text", "")
-        for entry in (translated.get("translations") or [])
-        if entry.get("id")
-    }
+    translated_lookup = build_translation_lookup_from_response(translated, preview_items)
+    translated_count = sum(1 for item in preview_items if (translated_lookup.get(item.item_id) or "").strip())
+    if translated_count == 0:
+        return jsonify({"error": "샘플 미리 번역 응답에서 번역 텍스트를 읽지 못했습니다."}), 502
+
     preset_id = (profile.get("tone_preset_id") or "custom").strip() or "custom"
     preset = CHARACTER_TONE_PRESETS.get(preset_id, CHARACTER_TONE_PRESETS["custom"])
     return jsonify(
@@ -6868,10 +7919,13 @@ def preview_character_tone() -> Any:
             "speaker_id": speaker_id,
             "speaker_name": speaker_name,
             "provider": provider,
+            "gemini_auth_mode": gemini_auth_mode,
             "openai_auth_mode": openai_auth_mode,
             "model_name": model_name,
+            "model_warning": model_warning,
+            "translated_count": translated_count,
             "tone_preset_id": preset_id,
-            "tone_preset_name": preset.get("name") or "직접 입력",
+            "tone_preset_name": preset.get("name") or "?? ??",
             "translations": [
                 {
                     "source_text": item.source_text,
@@ -6881,7 +7935,6 @@ def preview_character_tone() -> Any:
             ],
         }
     )
-
 
 @app.route("/load_editable_document", methods=["POST"])
 def load_editable_document() -> Any:
@@ -7030,25 +8083,38 @@ def apply_manual_edits() -> Any:
 
 @app.route("/translate", methods=["POST"])
 def handle_translation() -> Any:
-    log_message("'/translate' 요청 수신")
+    log_message("'/translate' ?? ??")
     data = request.get_json(force=True) or {}
     provider = (data.get("provider") or "gemini").lower()
+    gemini_auth_mode = normalize_gemini_auth_mode(provider, data.get("gemini_auth_mode"))
+    vertex_settings = normalize_vertex_settings(data.get("vertex_settings"))
     openai_auth_mode = normalize_openai_auth_mode(provider, data.get("openai_auth_mode"))
     openai_oauth_command = (data.get("openai_oauth_command") or DEFAULT_CODEX_CLI_COMMAND).strip()
     if provider not in SUPPORTED_PROVIDERS:
-        return jsonify({"error": f"지원하지 않는 공급자입니다: {provider}"}), 400
+        return jsonify({"error": f"???? ?? ??????: {provider}"}), 400
     if provider == "openai" and openai_auth_mode == "api_key" and OpenAI is None:
-        return jsonify({"error": "OpenAI 라이브러리를 로드하지 못했습니다."}), 500
-    if provider == "gemini" and genai is None:
-        return jsonify({"error": "Google Generative AI 라이브러리를 로드하지 못했습니다."}), 500
+        return jsonify({"error": "OpenAI ?????? ???? ?????."}), 500
+    if provider == "gemini" and gemini_auth_mode == "api_key" and genai is None:
+        return jsonify({"error": "Google Generative AI ?????? ???? ?????."}), 500
+    if provider == "gemini" and gemini_auth_mode == "vertex_ai" and google_genai is None:
+        return jsonify({"error": "google-genai ?????? ???? ?????."}), 500
 
     api_key = (data.get("api_key") or os.environ.get("OPENAI_API_KEY") or os.environ.get("GEMINI_API_KEY") or "").strip()
-    if provider == "gemini" and not api_key:
-        return jsonify({"error": "API 키가 제공되지 않았습니다."}), 400
+    if provider == "gemini" and gemini_auth_mode == "api_key" and not api_key:
+        return jsonify({"error": "API ?? ???? ?????."}), 400
+    if provider == "gemini" and gemini_auth_mode == "vertex_ai" and not vertex_settings.get("project_id"):
+        return jsonify({"error": "Vertex AI? ????? GCP ???? ID? ?????."}), 400
     if provider == "openai" and openai_auth_mode == "api_key" and not api_key:
-        return jsonify({"error": "API 키가 제공되지 않았습니다."}), 400
+        return jsonify({"error": "API ?? ???? ?????."}), 400
 
-    model_name = data.get("model_name") or (DEFAULT_CODEX_OAUTH_MODEL if provider == "openai" and openai_auth_mode == "oauth_cli" else DEFAULT_MODELS[provider])
+    model_name = data.get("model_name") or (
+        DEFAULT_CODEX_OAUTH_MODEL if provider == "openai" and openai_auth_mode == "oauth_cli" else DEFAULT_MODELS[provider]
+    )
+    model_warning = ""
+    if provider == "openai" and openai_auth_mode == "oauth_cli":
+        model_name, model_warning = normalize_codex_oauth_requested_model(model_name)
+        if model_warning:
+            log_message(f"Codex OAuth model normalized: {model_warning}")
     batch_size = int(data.get("batch_size") or DEFAULT_BATCH_SIZE_BY_PROVIDER.get(provider, 12))
     api_delay = float(data.get("api_delay") if data.get("api_delay") not in (None, "") else DEFAULT_API_DELAY_BY_PROVIDER.get(provider, 0.3))
     if provider == "openai" and openai_auth_mode == "oauth_cli":
@@ -7067,13 +8133,13 @@ def handle_translation() -> Any:
             scope = translation_inputs.get("translation_scope") or {}
             translation_rule = (translation_inputs.get("translation_scope") or {}).get("translation_rule") or "missing_only"
             if scope.get("mode") == "selected_items":
-                message = "현재 범위에는 다시 번역할 문제 후보 항목이 없습니다."
+                message = "?? ???? ?? ??? ?? ?? ??? ????."
             elif translation_rule == "retranslate_existing":
-                message = "현재 범위에는 재번역할 기존 번역 항목이 없습니다."
+                message = "?? ???? ???? ?? ?? ??? ????."
             elif translation_rule == "missing_only":
-                message = "현재 범위에는 미번역 항목이 없습니다."
+                message = "?? ???? ??? ??? ????."
             else:
-                message = "번역 가능한 항목을 찾지 못했습니다."
+                message = "?? ??? ??? ?? ?????."
             return jsonify({"error": message, "translation_scope": translation_inputs.get("translation_scope") or {}}), 400
 
         document_write_callback = None
@@ -7109,6 +8175,8 @@ def handle_translation() -> Any:
         session_runtime = build_translation_session_runtime(
             documents=documents,
             provider=provider,
+            gemini_auth_mode=gemini_auth_mode,
+            vertex_settings=vertex_settings,
             openai_auth_mode=openai_auth_mode,
             model_name=model_name,
             analysis_mode=translation_inputs["analysis_mode"],
@@ -7125,6 +8193,8 @@ def handle_translation() -> Any:
             provider=provider,
             api_key=api_key,
             model_name=model_name,
+            gemini_auth_mode=gemini_auth_mode,
+            vertex_settings=vertex_settings,
             character_profiles=character_profiles,
             world_settings=world_settings,
             character_registry=translation_inputs["character_registry"],
@@ -7153,8 +8223,10 @@ def handle_translation() -> Any:
             return jsonify(
                 {
                     "provider": provider,
+                    "gemini_auth_mode": gemini_auth_mode,
                     "openai_auth_mode": openai_auth_mode,
                     "model_name": model_name,
+                    "model_warning": model_warning,
                     "analysis_mode": translation_inputs["analysis_mode"],
                     "adult_review_path": write_result["adult_review_path"],
                     "skipped_adult_count": len(translation_payload["skipped_adult_items"]),
@@ -7208,8 +8280,10 @@ def handle_translation() -> Any:
         return jsonify(
             {
                 "provider": provider,
+                "gemini_auth_mode": gemini_auth_mode,
                 "openai_auth_mode": openai_auth_mode,
                 "model_name": model_name,
+                "model_warning": model_warning,
                 "analysis_mode": translation_inputs["analysis_mode"],
                 "skipped_adult_count": len(translation_payload["skipped_adult_items"]),
                 "failed_item_count": len(translation_payload["failed_items"]),
@@ -7237,7 +8311,6 @@ def handle_translation() -> Any:
                 "status_path": str(session_runtime.status_path),
             }
         return jsonify(payload), 500
-
 
 @app.route("/search_dialogue", methods=["POST"])
 def search_dialogue():
@@ -7351,5 +8424,16 @@ if __name__ == "__main__":
         game_exe_path_from_startup = sys.argv[1]
         log_message(f"시작 인자로 게임 경로 수신: {game_exe_path_from_startup}")
 
-    log_message("Flask 서버 시작 중... (http://127.0.0.1:5000)")
-    app.run(debug=True, host="0.0.0.0", port=5000)
+    try:
+        backend_port = int(str(os.environ.get("RENPY_TRANSLATOR_PORT", "5000")).strip() or "5000")
+    except (TypeError, ValueError):
+        backend_port = 5000
+    log_message(f"Flask 서버 시작 중... (http://127.0.0.1:{backend_port})")
+    debug_mode = str(os.environ.get("RENPY_TRANSLATOR_DEBUG", "")).strip().lower() in {"1", "true", "yes", "on"}
+    app.run(
+        debug=debug_mode,
+        use_reloader=debug_mode,
+        threaded=True,
+        host="0.0.0.0",
+        port=backend_port,
+    )

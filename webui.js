@@ -1,4 +1,5 @@
 const BACKEND_URL = "http://127.0.0.1:5000";
+const PROGRESS_BACKEND_URL = "http://127.0.0.1:5001";
 const MODEL_SUGGESTIONS = {
     gemini: [
         "gemini-2.5-flash",
@@ -56,6 +57,8 @@ const TRANSLATION_PRESETS = [
     },
 ];
 const DEFAULT_TRANSLATION_PRESET_ID = "gemini_quality";
+const DEFAULT_FONT_BROWSER_SAMPLE_TEXT = "가나다라마바사 ABC 123";
+const FONT_BROWSER_PAGE_SIZE = 18;
 const CHARACTER_TONE_PRESETS = [
     {
         id: "custom",
@@ -164,6 +167,12 @@ const state = {
     oauthStatusPollHandle: null,
     selectedFontPresetId: "",
     selectedTranslationPresetId: DEFAULT_TRANSLATION_PRESET_ID,
+    systemFonts: [],
+    systemFontsLoaded: false,
+    systemFontsLoading: false,
+    fontBrowserQuery: "",
+    fontBrowserTarget: "dialogue_font",
+    fontBrowserPage: 0,
     tonePreviewByCharacter: {},
     tonePreviewLoadingSpeakerId: null,
     selectedIssueCandidateIds: new Set(),
@@ -175,6 +184,13 @@ const state = {
     editorStatusFilter: "all",
     editorSearchQuery: "",
     editorDrafts: {},
+    translationProgressPollHandle: null,
+    translationProgressSession: null,
+    translationProgressStatus: null,
+    translationProgressRequestActive: false,
+    translationProgressBusy: false,
+    translationProgressFailureCount: 0,
+    translationProgressLastLogKey: "",
 };
 
 
@@ -229,6 +245,8 @@ function applyAnalysisFileSelection(analysis, options = {}) {
 
 const dom = {
     providerSelect: document.getElementById("providerSelect"),
+    geminiAuthField: document.getElementById("geminiAuthField"),
+    geminiAuthModeSelect: document.getElementById("geminiAuthModeSelect"),
     openaiAuthField: document.getElementById("openaiAuthField"),
     openaiAuthModeSelect: document.getElementById("openaiAuthModeSelect"),
     apiKeyField: document.getElementById("apiKeyField"),
@@ -237,6 +255,15 @@ const dom = {
     loadApiKeyButton: document.getElementById("loadApiKeyButton"),
     clearApiKeyButton: document.getElementById("clearApiKeyButton"),
     apiKeyStorageStatus: document.getElementById("apiKeyStorageStatus"),
+    geminiVertexPanel: document.getElementById("geminiVertexPanel"),
+    vertexProjectIdInput: document.getElementById("vertexProjectIdInput"),
+    vertexLocationInput: document.getElementById("vertexLocationInput"),
+    vertexCredentialsPathInput: document.getElementById("vertexCredentialsPathInput"),
+    loadVertexCredentialsFileButton: document.getElementById("loadVertexCredentialsFileButton"),
+    clearVertexCredentialsButton: document.getElementById("clearVertexCredentialsButton"),
+    vertexCredentialsFileInput: document.getElementById("vertexCredentialsFileInput"),
+    vertexCredentialsJsonInput: document.getElementById("vertexCredentialsJsonInput"),
+    vertexCredentialsStatus: document.getElementById("vertexCredentialsStatus"),
     openaiOAuthPanel: document.getElementById("openaiOAuthPanel"),
     openaiOAuthCommandInput: document.getElementById("openaiOAuthCommandInput"),
     setupOpenAIOAuthButton: document.getElementById("setupOpenAIOAuthButton"),
@@ -287,6 +314,7 @@ const dom = {
     autoAdjustFontSizesCheckbox: document.getElementById("autoAdjustFontSizesCheckbox"),
     fontPresetSelect: document.getElementById("fontPresetSelect"),
     applyFontPresetButton: document.getElementById("applyFontPresetButton"),
+    applyPublishFontsButton: document.getElementById("applyPublishFontsButton"),
     dialogueFontSelect: document.getElementById("dialogueFontSelect"),
     nameFontSelect: document.getElementById("nameFontSelect"),
     optionsFontSelect: document.getElementById("optionsFontSelect"),
@@ -298,6 +326,17 @@ const dom = {
     optionsScaleInput: document.getElementById("optionsScaleInput"),
     interfaceScaleInput: document.getElementById("interfaceScaleInput"),
     publishBaselineSummary: document.getElementById("publishBaselineSummary"),
+    loadSystemFontsButton: document.getElementById("loadSystemFontsButton"),
+    fontBrowserTargetSelect: document.getElementById("fontBrowserTargetSelect"),
+    fontBrowserSearchInput: document.getElementById("fontBrowserSearchInput"),
+    applyFirstFilteredFontButton: document.getElementById("applyFirstFilteredFontButton"),
+    fontBrowserSampleTextInput: document.getElementById("fontBrowserSampleTextInput"),
+    fontBrowserStatus: document.getElementById("fontBrowserStatus"),
+    fontBrowserPageInfo: document.getElementById("fontBrowserPageInfo"),
+    fontBrowserPrevButton: document.getElementById("fontBrowserPrevButton"),
+    fontBrowserNextButton: document.getElementById("fontBrowserNextButton"),
+    currentFontPreviewGrid: document.getElementById("currentFontPreviewGrid"),
+    systemFontGallery: document.getElementById("systemFontGallery"),
     styleOverrideTable: document.getElementById("styleOverrideTable"),
     addStyleOverrideRowButton: document.getElementById("addStyleOverrideRowButton"),
     fontSuggestionList: document.getElementById("fontSuggestionList"),
@@ -323,7 +362,9 @@ const dom = {
     characterGrid: document.getElementById("characterGrid"),
     translationRuleSelect: document.getElementById("translationRuleSelect"),
     translateButton: document.getElementById("translateButton"),
+    attachProgressButton: document.getElementById("attachProgressButton"),
     translationHint: document.getElementById("translationHint"),
+    translationProgressPanel: document.getElementById("translationProgressPanel"),
     resultsPanel: document.getElementById("resultsPanel"),
     logPanel: document.getElementById("logPanel"),
     saveProfileButton: document.getElementById("saveProfileButton"),
@@ -351,10 +392,10 @@ async function apiGet(path) {
 }
 
 
-async function apiPost(path, payload) {
+async function apiPostWithBase(baseUrl, path, payload) {
     let response;
     try {
-        response = await fetch(`${BACKEND_URL}${path}`, {
+        response = await fetch(`${baseUrl}${path}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
@@ -389,6 +430,30 @@ async function apiPost(path, payload) {
 }
 
 
+async function apiPost(path, payload) {
+    return apiPostWithBase(BACKEND_URL, path, payload);
+}
+
+
+async function apiPostProgress(path, payload) {
+    try {
+        return await apiPostWithBase(PROGRESS_BACKEND_URL, path, payload);
+    } catch (error) {
+        const message = String(error?.message || "");
+        const shouldFallback = message.includes("404")
+            || message.includes("Not Found")
+            || message.includes("Failed to fetch")
+            || message.includes("NetworkError")
+            || message.includes("TypeError")
+            || message.includes("백엔드 요청 실패");
+        if (!shouldFallback) {
+            throw error;
+        }
+        return apiPost(path, payload);
+    }
+}
+
+
 function escapeHtml(value) {
     return String(value ?? "")
         .replaceAll("&", "&amp;")
@@ -396,6 +461,243 @@ function escapeHtml(value) {
         .replaceAll(">", "&gt;")
         .replaceAll('"', "&quot;")
         .replaceAll("'", "&#39;");
+}
+
+
+function resetTranslationProgress(options = {}) {
+    return resetTranslationProgressUi(options);
+}
+
+
+function formatTranslationStatusTimestamp(value) {
+    if (!value) {
+        return "-";
+    }
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+        return String(value);
+    }
+    return parsed.toLocaleTimeString("ko-KR", { hour12: false });
+}
+
+
+function renderTranslationProgress(status = state.translationProgressStatus) {
+    return renderTranslationProgressUi(status);
+}
+
+
+async function fetchTranslationProgressStatus() {
+    return fetchTranslationProgressStatusUi();
+}
+
+
+async function prepareTranslationProgress(payload) {
+    return prepareTranslationProgressUi(payload);
+}
+
+
+function resetTranslationProgressUi(options = {}) {
+    if (state.translationProgressPollHandle) {
+        clearInterval(state.translationProgressPollHandle);
+        state.translationProgressPollHandle = null;
+    }
+    state.translationProgressBusy = false;
+    state.translationProgressFailureCount = 0;
+    state.translationProgressRequestActive = false;
+    if (!options.preserveSession) {
+        state.translationProgressSession = null;
+        state.translationProgressStatus = null;
+        state.translationProgressLastLogKey = "";
+    }
+    renderTranslationProgressUi();
+}
+
+
+function renderTranslationProgressUi(status = state.translationProgressStatus) {
+    if (!dom.translationProgressPanel) {
+        return;
+    }
+    const session = state.translationProgressSession;
+    if (!session && !status) {
+        dom.translationProgressPanel.className = "results-panel empty-state";
+        dom.translationProgressPanel.textContent = "번역 진행도 표시가 아직 없습니다.";
+        return;
+    }
+
+    const total = Number(status?.total_item_count || 0);
+    const completed = Number(status?.completed_item_count || 0);
+    const translated = Number(status?.translated_item_count || 0);
+    const pending = Number(status?.pending_item_count || 0);
+    const failed = Number(status?.failed_item_count || 0);
+    const skipped = Number(status?.skipped_adult_count || 0);
+    const completedBatches = Number(status?.completed_batch_count || 0);
+    const percent = Math.max(0, Math.min(100, Number(status?.progress_percent || 0)));
+    const staleSeconds = Number(status?.stale_seconds || 0);
+    const isStale = state.translationProgressRequestActive && staleSeconds >= 30;
+    const statusLabel = status?.halted ? "중단됨" : (state.translationProgressRequestActive ? "진행 중" : "대기/완료");
+    const currentDocument = status?.current_document || session?.current_document || "-";
+    const latestAttemptName = status?.latest_attempt_name || "-";
+    const latestAttemptPath = status?.latest_attempt?.document_path || "";
+    const sessionId = status?.session_id || session?.session_id || "-";
+    const updatedAtLabel = formatTranslationStatusTimestamp(status?.updated_at || "");
+    const staleLabel = isStale
+        ? `<span class="pill warning">갱신 지연 ${escapeHtml(Math.round(staleSeconds))}초</span>`
+        : "";
+
+    dom.translationProgressPanel.className = "results-panel translation-progress-panel";
+    dom.translationProgressPanel.innerHTML = `
+        <div class="result-row">
+            <div class="translation-progress-header">
+                <div>
+                    <strong>실시간 진행도</strong>
+                    <div class="helper-text">session=${escapeHtml(sessionId)} · 상태=${escapeHtml(statusLabel)} · 최근 갱신=${escapeHtml(updatedAtLabel)}</div>
+                </div>
+                <div class="pill-list compact">
+                    <span class="pill subtle">${escapeHtml(percent.toFixed(1))}%</span>
+                    ${staleLabel}
+                </div>
+            </div>
+            <div class="translation-progress-meter" aria-label="translation progress">
+                <div class="translation-progress-fill" style="width:${percent.toFixed(2)}%"></div>
+            </div>
+            <div class="translation-progress-grid">
+                <div class="translation-progress-stat"><strong>${escapeHtml(String(completed))}</strong><span>완료/처리</span></div>
+                <div class="translation-progress-stat"><strong>${escapeHtml(String(translated))}</strong><span>번역 완료</span></div>
+                <div class="translation-progress-stat"><strong>${escapeHtml(String(pending))}</strong><span>대기</span></div>
+                <div class="translation-progress-stat"><strong>${escapeHtml(String(failed))}</strong><span>실패</span></div>
+                <div class="translation-progress-stat"><strong>${escapeHtml(String(skipped))}</strong><span>성인 보류</span></div>
+                <div class="translation-progress-stat"><strong>${escapeHtml(String(total))}</strong><span>전체 항목</span></div>
+            </div>
+            <div class="helper-text">현재 문서: ${escapeHtml(currentDocument || "-")}</div>
+            <div class="helper-text">최근 attempt: ${escapeHtml(latestAttemptName)}${latestAttemptPath ? ` · ${escapeHtml(latestAttemptPath)}` : ""} · 완료 배치 ${escapeHtml(String(completedBatches))}</div>
+            ${status?.last_error ? `<div class="helper-text" style="color: var(--danger);">최근 오류: ${escapeHtml(status.last_error)}</div>` : ""}
+            ${status?.halt_reason ? `<div class="helper-text" style="color: var(--warning);">중단 사유: ${escapeHtml(status.halt_reason)}</div>` : ""}
+        </div>
+    `;
+}
+
+
+function buildTranslationProgressLogKey(status = state.translationProgressStatus) {
+    if (!status) {
+        return "";
+    }
+    return [
+        status.session_id || "",
+        Number(status.translated_item_count || 0),
+        Number(status.pending_item_count || 0),
+        Number(status.failed_item_count || 0),
+        Number(status.completed_batch_count || 0),
+        status.current_document || "",
+        status.halted ? "halted" : "active",
+        status.halt_reason || "",
+    ].join("|");
+}
+
+
+function logTranslationProgressUpdate(status = state.translationProgressStatus, options = {}) {
+    if (!status) {
+        return;
+    }
+    const logKey = buildTranslationProgressLogKey(status);
+    if (!logKey) {
+        return;
+    }
+    if (!options.force && logKey === state.translationProgressLastLogKey) {
+        return;
+    }
+    state.translationProgressLastLogKey = logKey;
+
+    const total = Number(status.total_item_count || 0);
+    const translated = Number(status.translated_item_count || 0);
+    const pending = Number(status.pending_item_count || 0);
+    const completedBatches = Number(status.completed_batch_count || 0);
+    const percent = Math.max(0, Math.min(100, Number(status.progress_percent || 0)));
+    const currentDocument = status.current_document || "-";
+    const lastError = String(status.last_error || "").trim();
+    const message = `실시간 진행: ${translated}/${total} (${percent.toFixed(1)}%) · 남음 ${pending} · 배치 ${completedBatches} · 문서 ${currentDocument}`;
+
+    if (status.halted) {
+        addLog(`번역 중단: ${status.halt_reason || message}`, "warning");
+        return;
+    }
+    if (lastError) {
+        addLog(`${message} · 최근 오류: ${lastError}`, "warning");
+        return;
+    }
+    addLog(message, options.type || "info");
+}
+
+
+function normalizeProgressScope(scope = {}) {
+    const payload = scope && typeof scope === "object" ? scope : {};
+    const normalized = {};
+    for (const [key, value] of Object.entries(payload)) {
+        if (Array.isArray(value)) {
+            normalized[key] = value.map((item) => String(item ?? "").trim()).filter(Boolean).sort();
+        } else if (value == null) {
+            normalized[key] = "";
+        } else {
+            normalized[key] = value;
+        }
+    }
+    return normalized;
+}
+
+
+async function fetchTranslationProgressStatusUi() {
+    if (!state.translationProgressSession || state.translationProgressBusy) {
+        return;
+    }
+    state.translationProgressBusy = true;
+    try {
+        const response = await apiPostProgress("/translation_status", {
+            session_id: state.translationProgressSession.session_id,
+            analysis_mode: state.translationProgressSession.analysis_mode,
+            target_language: state.translationProgressSession.target_language,
+            game_exe_path: state.translationProgressSession.game_exe_path || "",
+        });
+        state.translationProgressFailureCount = 0;
+        state.translationProgressStatus = response;
+        renderTranslationProgressUi(response);
+        logTranslationProgressUpdate(response);
+    } catch (error) {
+        state.translationProgressFailureCount += 1;
+        if (state.translationProgressRequestActive && (state.translationProgressFailureCount === 1 || state.translationProgressFailureCount === 5)) {
+            addLog(`진행도 조회 실패: ${error.message}`, "warning");
+        }
+        if (state.translationProgressFailureCount >= 5) {
+            resetTranslationProgressUi({ preserveSession: true });
+        }
+    } finally {
+        state.translationProgressBusy = false;
+    }
+}
+
+
+async function prepareTranslationProgressUi(payload) {
+    try {
+        const response = await apiPostProgress("/resolve_translation_session", payload);
+        state.translationProgressSession = {
+            session_id: response.session_id,
+            analysis_mode: response.analysis_mode,
+            target_language: response.target_language,
+            game_exe_path: payload.game_exe_path || "",
+            status_path: response.status_path || "",
+        };
+        state.translationProgressStatus = response.status || null;
+        state.translationProgressRequestActive = true;
+        renderTranslationProgressUi();
+        if (response.status) {
+            logTranslationProgressUpdate(response.status, { force: true });
+        }
+        activateTab("results");
+        await fetchTranslationProgressStatusUi();
+        state.translationProgressPollHandle = window.setInterval(() => {
+            fetchTranslationProgressStatusUi().catch(() => {});
+        }, 2000);
+    } catch (error) {
+        addLog(`진행도 세션 준비 실패: ${error.message}`, "warning");
+    }
 }
 
 
@@ -476,6 +778,78 @@ function getApiKeyStorageKey(provider = dom.providerSelect?.value || "gemini", a
 function getStoredApiKey(provider = dom.providerSelect?.value || "gemini", authMode = getOpenAIAuthMode()) {
     try {
         return window.localStorage.getItem(getApiKeyStorageKey(provider, authMode)) || "";
+    } catch (error) {
+        return "";
+    }
+}
+
+
+function getGeminiAuthMode() {
+    return dom.geminiAuthModeSelect?.value || "api_key";
+}
+
+
+function usesGeminiVertex() {
+    return (dom.providerSelect?.value || "gemini") === "gemini" && getGeminiAuthMode() === "vertex_ai";
+}
+
+
+function supportsApiKey(
+    provider = dom.providerSelect?.value || "gemini",
+    openaiAuthMode = getOpenAIAuthMode(),
+    geminiAuthMode = getGeminiAuthMode(),
+) {
+    return (provider === "gemini" && geminiAuthMode !== "vertex_ai")
+        || (provider === "openai" && openaiAuthMode === "api_key");
+}
+
+
+function getApiKeyStorageScope(
+    provider = dom.providerSelect?.value || "gemini",
+    openaiAuthMode = getOpenAIAuthMode(),
+    geminiAuthMode = getGeminiAuthMode(),
+) {
+    if (provider === "openai") {
+        return `openai:${openaiAuthMode}`;
+    }
+    if (provider === "gemini" && geminiAuthMode === "vertex_ai") {
+        return "gemini:vertex_ai";
+    }
+    return provider || "gemini";
+}
+
+
+function getApiKeyStorageLabel(
+    provider = dom.providerSelect?.value || "gemini",
+    openaiAuthMode = getOpenAIAuthMode(),
+    geminiAuthMode = getGeminiAuthMode(),
+) {
+    if (provider === "openai" && openaiAuthMode === "api_key") {
+        return "OpenAI API key";
+    }
+    if (provider === "gemini" && geminiAuthMode === "vertex_ai") {
+        return "Vertex AI";
+    }
+    return "Gemini API key";
+}
+
+
+function getApiKeyStorageKey(
+    provider = dom.providerSelect?.value || "gemini",
+    openaiAuthMode = getOpenAIAuthMode(),
+    geminiAuthMode = getGeminiAuthMode(),
+) {
+    return `${API_KEY_STORAGE_PREFIX}:${getApiKeyStorageScope(provider, openaiAuthMode, geminiAuthMode)}`;
+}
+
+
+function getStoredApiKey(
+    provider = dom.providerSelect?.value || "gemini",
+    openaiAuthMode = getOpenAIAuthMode(),
+    geminiAuthMode = getGeminiAuthMode(),
+) {
+    try {
+        return window.localStorage.getItem(getApiKeyStorageKey(provider, openaiAuthMode, geminiAuthMode)) || "";
     } catch (error) {
         return "";
     }
@@ -768,11 +1142,13 @@ function buildCharacterPreviewCacheKey(character, variants, sampleLines) {
     return JSON.stringify({
         speakerId: character.speaker_id,
         provider: settings.provider,
+        geminiAuthMode: settings.geminiAuthMode,
         openaiAuthMode: settings.openaiAuthMode,
         modelName: settings.modelName,
         targetLanguage: dom.targetLanguageInput.value.trim() || "ko",
         includeAdult: dom.includeAdultCheckbox.checked,
         worldSettings: collectWorldSettings(),
+        vertexSettings: collectVertexSettings(),
         sampleLines,
         variants: variants.map((variant) => ({
             variantId: variant.variantId,
@@ -860,6 +1236,7 @@ function formatNumericSetting(value) {
 function getCurrentTranslationSettings() {
     return {
         provider: dom.providerSelect.value || "gemini",
+        geminiAuthMode: getGeminiAuthMode(),
         openaiAuthMode: getOpenAIAuthMode(),
         modelName: dom.modelInput.value.trim(),
         batchSize: normalizeNumericSetting(dom.batchSizeInput.value, getDefaultBatchSizeValue()),
@@ -907,7 +1284,7 @@ function renderTranslationPresetSummary() {
     const preset = getTranslationPresetById(state.selectedTranslationPresetId);
     if (preset) {
         const runtimeLabel = preset.provider === "gemini"
-            ? "Gemini API"
+            ? (usesGeminiVertex() ? "Vertex AI" : "Gemini API")
             : preset.openaiAuthMode === "oauth_cli"
                 ? "OpenAI OAuth / Codex CLI"
                 : "OpenAI API";
@@ -920,7 +1297,7 @@ function renderTranslationPresetSummary() {
 
     const current = getCurrentTranslationSettings();
     const runtimeLabel = current.provider === "gemini"
-        ? "Gemini API"
+        ? (current.geminiAuthMode === "vertex_ai" ? "Vertex AI" : "Gemini API")
         : current.openaiAuthMode === "oauth_cli"
             ? "OpenAI OAuth / Codex CLI"
             : "OpenAI API";
@@ -1134,6 +1511,121 @@ function captureStyleOverrideRows() {
 }
 
 
+function normalizeFontOptionEntry(entry) {
+    if (entry === undefined || entry === null) {
+        return null;
+    }
+    if (typeof entry === "string") {
+        return {
+            value: entry,
+            label: entry,
+            source: "game",
+            fontId: "",
+        };
+    }
+
+    const value = String(entry.value ?? entry.path ?? "").trim();
+    if (!value && entry.value !== "") {
+        return null;
+    }
+    return {
+        value,
+        label: String(entry.label ?? entry.display_name ?? entry.file_name ?? value).trim() || value,
+        source: String(entry.source || ""),
+        fontId: String(entry.fontId || entry.font_id || ""),
+        familyName: String(entry.family_name || ""),
+        styleName: String(entry.style_name || ""),
+        fileName: String(entry.file_name || ""),
+        previewUrl: String(entry.preview_url || ""),
+    };
+}
+
+
+function getFontBrowserSampleText() {
+    return dom.fontBrowserSampleTextInput?.value.trim() || DEFAULT_FONT_BROWSER_SAMPLE_TEXT;
+}
+
+
+function buildFontPreviewUrl(options = {}) {
+    const params = new URLSearchParams();
+    params.set("sample", String(options.sampleText || getFontBrowserSampleText()).trim() || DEFAULT_FONT_BROWSER_SAMPLE_TEXT);
+    params.set("width", String(options.width || 640));
+    params.set("height", String(options.height || 140));
+    if (options.fontId) {
+        params.set("font_id", String(options.fontId));
+    } else if (options.fontReference) {
+        params.set("font_reference", String(options.fontReference));
+        if (state.analysis?.game_dir) {
+            params.set("game_dir", String(state.analysis.game_dir));
+        }
+    } else if (options.path) {
+        params.set("path", String(options.path));
+    }
+    return `${BACKEND_URL}/font_preview?${params.toString()}`;
+}
+
+
+function buildGameFontOptionEntries() {
+    const fontCandidates = state.analysis?.gui_baseline?.font_candidates || [];
+    return fontCandidates.map((value) => ({
+        value,
+        label: value,
+        source: "game",
+        fontId: "",
+        previewUrl: buildFontPreviewUrl({ fontReference: value, width: 420, height: 160 }),
+    }));
+}
+
+
+function buildSystemFontOptionEntries() {
+    return (state.systemFonts || []).map((font) => ({
+        value: font.path,
+        label: `${font.display_name}${font.style_name ? ` · ${font.style_name}` : ""} · Windows`,
+        source: font.source || "system",
+        fontId: font.font_id,
+        familyName: font.family_name || "",
+        styleName: font.style_name || "",
+        fileName: font.file_name || "",
+        previewUrl: String(font.preview_url || buildFontPreviewUrl({ fontId: font.font_id, width: 360, height: 160 })),
+    }));
+}
+
+
+function getCombinedFontOptionEntries(currentValue = "") {
+    const byValue = new Map();
+    const pushEntry = (entry) => {
+        const normalized = normalizeFontOptionEntry(entry);
+        if (!normalized || byValue.has(normalized.value)) {
+            return;
+        }
+        byValue.set(normalized.value, normalized);
+    };
+
+    buildGameFontOptionEntries().forEach(pushEntry);
+    buildSystemFontOptionEntries().forEach(pushEntry);
+    if (currentValue) {
+        pushEntry({ value: currentValue, label: currentValue, source: "custom" });
+    }
+    return Array.from(byValue.values());
+}
+
+
+function getFontEntryByValue(value) {
+    const normalizedValue = String(value || "").trim();
+    if (!normalizedValue) {
+        return null;
+    }
+    return getCombinedFontOptionEntries(normalizedValue).find((entry) => entry.value === normalizedValue) || null;
+}
+
+
+function buildFontDatalistValues() {
+    return getCombinedFontOptionEntries()
+        .map((entry) => entry.value)
+        .filter(Boolean);
+}
+
+
 function updateSuggestionList(datalistElement, values = []) {
     if (!datalistElement) {
         return;
@@ -1213,6 +1705,70 @@ function collectWorldSettings() {
         style_rules: dom.styleRulesInput.value.trim(),
         protected_terms: dom.protectedTermsInput.value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean),
         glossary: captureGlossaryRows(),
+    };
+}
+
+
+function setVertexCredentialsStatus(message) {
+    if (dom.vertexCredentialsStatus) {
+        dom.vertexCredentialsStatus.textContent = message;
+    }
+}
+
+
+function parseVertexCredentialsJson(rawText) {
+    const text = String(rawText || "").trim();
+    if (!text) {
+        return null;
+    }
+    const parsed = JSON.parse(text);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("서비스 계정 JSON 객체 형식이 아닙니다.");
+    }
+    return parsed;
+}
+
+
+function applyVertexCredentialsJson(rawText, sourceLabel = "붙여넣기") {
+    const text = String(rawText || "").trim();
+    if (!text) {
+        if (dom.vertexCredentialsJsonInput) {
+            dom.vertexCredentialsJsonInput.value = "";
+        }
+        setVertexCredentialsStatus("서비스 계정 JSON이 비어 있습니다.");
+        return false;
+    }
+
+    const parsed = parseVertexCredentialsJson(text);
+    if (dom.vertexCredentialsJsonInput) {
+        dom.vertexCredentialsJsonInput.value = JSON.stringify(parsed, null, 2);
+    }
+    const inferredProjectId = String(parsed.project_id || parsed.project || "").trim();
+    if (inferredProjectId && !(dom.vertexProjectIdInput?.value || "").trim()) {
+        dom.vertexProjectIdInput.value = inferredProjectId;
+    }
+    setVertexCredentialsStatus(`${sourceLabel}에서 서비스 계정 JSON을 불러왔습니다.${inferredProjectId ? ` project_id=${inferredProjectId}` : ""}`);
+    return true;
+}
+
+
+function clearVertexCredentialsJson() {
+    if (dom.vertexCredentialsJsonInput) {
+        dom.vertexCredentialsJsonInput.value = "";
+    }
+    if (dom.vertexCredentialsFileInput) {
+        dom.vertexCredentialsFileInput.value = "";
+    }
+    setVertexCredentialsStatus("서비스 계정 JSON 입력이 비워졌습니다.");
+}
+
+
+function collectVertexSettings() {
+    return {
+        project_id: dom.vertexProjectIdInput?.value.trim() || "",
+        location: dom.vertexLocationInput?.value.trim() || "global",
+        credentials_path: dom.vertexCredentialsPathInput?.value.trim() || "",
+        credentials_json: dom.vertexCredentialsJsonInput?.value.trim() || "",
     };
 }
 
@@ -1394,6 +1950,502 @@ function applyPublishSettings(publishSettings = {}, overwrite = false) {
     }
 }
 
+function updateFontSelectOptions(selectElement, values = [], currentValue = "") {
+    if (!selectElement) {
+        return;
+    }
+    const normalizedEntries = [];
+    const seen = new Set();
+    const pushEntry = (entry) => {
+        const normalized = normalizeFontOptionEntry(entry);
+        if (!normalized || seen.has(normalized.value)) {
+            return;
+        }
+        seen.add(normalized.value);
+        normalizedEntries.push(normalized);
+    };
+
+    pushEntry({ value: "", label: "기존 유지" });
+    values.forEach(pushEntry);
+    if (currentValue) {
+        pushEntry(getFontEntryByValue(currentValue) || { value: currentValue, label: currentValue });
+    }
+
+    selectElement.innerHTML = "";
+    normalizedEntries.forEach((entry) => {
+        const option = document.createElement("option");
+        option.value = entry.value;
+        option.textContent = entry.label || (entry.value ? entry.value : "기존 유지");
+        selectElement.appendChild(option);
+    });
+    selectElement.value = String(currentValue || "");
+}
+
+
+function setFontBrowserStatus(message, type = "info") {
+    if (!dom.fontBrowserStatus) {
+        return;
+    }
+    dom.fontBrowserStatus.textContent = message;
+    dom.fontBrowserStatus.dataset.state = type;
+}
+
+
+function getPublishFontFieldMap() {
+    return {
+        dialogue_font: dom.dialogueFontSelect,
+        name_font: dom.nameFontSelect,
+        options_font: dom.optionsFontSelect,
+        interface_font: dom.interfaceFontSelect,
+        system_font: dom.systemFontSelect,
+        glyph_font: dom.glyphFontSelect,
+    };
+}
+
+
+function getPublishFontLabel(key) {
+    return {
+        dialogue_font: "대사 폰트",
+        name_font: "이름 폰트",
+        options_font: "옵션 폰트",
+        interface_font: "UI 폰트",
+        system_font: "시스템 폰트",
+        glyph_font: "Glyph 폰트",
+    }[key] || key;
+}
+
+
+function getFilteredSystemFonts() {
+    const query = state.fontBrowserQuery.trim().toLowerCase();
+    return (state.systemFonts || []).filter((font) => {
+        if (!query) {
+            return true;
+        }
+        const haystack = [font.display_name, font.family_name, font.style_name, font.file_name]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase();
+        return haystack.includes(query);
+    });
+}
+
+function renderCurrentFontPreviewGrid() {
+    if (!dom.currentFontPreviewGrid) {
+        return;
+    }
+    dom.currentFontPreviewGrid.innerHTML = "";
+
+    const fieldMap = getPublishFontFieldMap();
+    const cards = Object.entries(fieldMap).map(([key, element]) => ({
+        key,
+        label: getPublishFontLabel(key),
+        value: element?.value.trim() || "",
+        entry: getFontEntryByValue(element?.value.trim() || ""),
+    }));
+
+    if (!cards.some((card) => card.value)) {
+        dom.currentFontPreviewGrid.className = "current-font-preview-grid empty-state";
+        dom.currentFontPreviewGrid.textContent = "폰트를 선택하면 현재 슬롯별 미리보기가 여기에 표시됩니다.";
+        return;
+    }
+
+    dom.currentFontPreviewGrid.className = "current-font-preview-grid";
+    cards.forEach((card) => {
+        const article = document.createElement("article");
+        article.className = "font-preview-card";
+
+        const heading = document.createElement("div");
+        heading.className = "font-preview-card-head";
+        heading.innerHTML = `
+            <strong>${escapeHtml(card.label)}</strong>
+            <span class="helper-text">${escapeHtml(card.entry?.label || (card.value || "기존 유지"))}</span>
+        `;
+        article.appendChild(heading);
+
+        if (card.value) {
+            const preview = document.createElement("img");
+            preview.className = "font-preview-image";
+            preview.alt = `${card.label} preview`;
+            preview.loading = "lazy";
+            preview.src = card.entry?.previewUrl || buildFontPreviewUrl({ fontReference: card.value, width: 420, height: 160 });
+            article.appendChild(preview);
+        } else {
+            const empty = document.createElement("div");
+            empty.className = "font-preview-empty";
+            empty.textContent = "기존 폰트를 유지합니다.";
+            article.appendChild(empty);
+        }
+
+        dom.currentFontPreviewGrid.appendChild(article);
+    });
+}
+
+
+function renderSystemFontGallery() {
+    if (!dom.systemFontGallery) {
+        return;
+    }
+
+    if (state.systemFontsLoading) {
+        dom.systemFontGallery.className = "system-font-gallery empty-state";
+        dom.systemFontGallery.textContent = "Windows 글꼴을 읽는 중입니다...";
+        return;
+    }
+    if (!state.systemFontsLoaded) {
+        dom.systemFontGallery.className = "system-font-gallery empty-state";
+        dom.systemFontGallery.textContent = "윈도우 글꼴을 불러오면 여기에 미리보기 카드가 표시됩니다.";
+        return;
+    }
+
+    const filtered = getFilteredSystemFonts();
+    const visibleFonts = filtered.slice(0, query ? 72 : 36);
+    setFontBrowserStatus(
+        `Windows 글꼴 ${state.systemFonts.length}개 중 ${visibleFonts.length}개 표시 · 적용 슬롯: ${getPublishFontLabel(state.fontBrowserTarget)}`,
+        visibleFonts.length ? "ready" : "warning",
+    );
+
+    if (!visibleFonts.length) {
+        dom.systemFontGallery.className = "system-font-gallery empty-state";
+        dom.systemFontGallery.textContent = "검색 조건에 맞는 글꼴이 없습니다.";
+        return;
+    }
+
+    dom.systemFontGallery.className = "system-font-gallery";
+    dom.systemFontGallery.innerHTML = "";
+    visibleFonts.forEach((font) => {
+        const article = document.createElement("article");
+        article.className = "font-browser-card";
+
+        const preview = document.createElement("img");
+        preview.className = "font-preview-image";
+        preview.alt = `${font.display_name} preview`;
+        preview.loading = "lazy";
+        preview.src = buildFontPreviewUrl({ fontId: font.font_id, width: 520, height: 112 });
+        article.appendChild(preview);
+
+        const meta = document.createElement("div");
+        meta.className = "font-browser-meta";
+        meta.innerHTML = `
+            <strong>${escapeHtml(font.display_name || font.file_name || font.path)}</strong>
+            <span class="helper-text">${escapeHtml([font.style_name, font.file_name].filter(Boolean).join(" · "))}</span>
+        `;
+        article.appendChild(meta);
+
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "secondary-button";
+        button.dataset.action = "apply-system-font";
+        button.dataset.fontId = font.font_id;
+        button.textContent = `${getPublishFontLabel(state.fontBrowserTarget)}에 적용`;
+        article.appendChild(button);
+
+        dom.systemFontGallery.appendChild(article);
+    });
+}
+
+function renderSystemFontGallery() {
+    if (!dom.systemFontGallery) {
+        return;
+    }
+
+    const setPaginationState = (page, totalPages, canGoPrev, canGoNext) => {
+        if (dom.fontBrowserPageInfo) {
+            dom.fontBrowserPageInfo.textContent = `페이지 ${page} / ${totalPages}`;
+        }
+        if (dom.fontBrowserPrevButton) {
+            dom.fontBrowserPrevButton.disabled = !canGoPrev;
+        }
+        if (dom.fontBrowserNextButton) {
+            dom.fontBrowserNextButton.disabled = !canGoNext;
+        }
+    };
+
+    if (state.systemFontsLoading) {
+        dom.systemFontGallery.className = "system-font-gallery empty-state";
+        dom.systemFontGallery.textContent = "Windows 글꼴을 읽는 중입니다...";
+        setPaginationState(1, 1, false, false);
+        return;
+    }
+    if (!state.systemFontsLoaded) {
+        dom.systemFontGallery.className = "system-font-gallery empty-state";
+        dom.systemFontGallery.textContent = "윈도우 글꼴을 불러오면 여기에 미리보기 카드가 표시됩니다.";
+        setPaginationState(1, 1, false, false);
+        return;
+    }
+
+    const query = state.fontBrowserQuery.trim().toLowerCase();
+    const filtered = (state.systemFonts || []).filter((font) => {
+        if (!query) {
+            return true;
+        }
+        const haystack = [font.display_name, font.family_name, font.style_name, font.file_name]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase();
+        return haystack.includes(query);
+    });
+    const totalPages = Math.max(1, Math.ceil(filtered.length / FONT_BROWSER_PAGE_SIZE));
+    state.fontBrowserPage = Math.min(Math.max(state.fontBrowserPage || 0, 0), totalPages - 1);
+    const startIndex = state.fontBrowserPage * FONT_BROWSER_PAGE_SIZE;
+    const endIndex = startIndex + FONT_BROWSER_PAGE_SIZE;
+    const visibleFonts = filtered.slice(startIndex, endIndex);
+    const pageLabel = filtered.length
+        ? `${startIndex + 1}-${Math.min(endIndex, filtered.length)}`
+        : "0";
+    setFontBrowserStatus(
+        `Windows 글꼴 ${state.systemFonts.length}개 중 ${filtered.length}개 검색 결과 · 현재 ${pageLabel} 표시 · 적용 슬롯: ${getPublishFontLabel(state.fontBrowserTarget)}`,
+        visibleFonts.length ? "ready" : "warning",
+    );
+    setPaginationState(
+        state.fontBrowserPage + 1,
+        totalPages,
+        state.fontBrowserPage > 0,
+        state.fontBrowserPage < totalPages - 1,
+    );
+
+    if (!visibleFonts.length) {
+        dom.systemFontGallery.className = "system-font-gallery empty-state";
+        dom.systemFontGallery.textContent = "검색 조건에 맞는 글꼴이 없습니다.";
+        return;
+    }
+
+    dom.systemFontGallery.className = "system-font-gallery";
+    dom.systemFontGallery.innerHTML = "";
+    visibleFonts.forEach((font) => {
+        const article = document.createElement("article");
+        article.className = "font-browser-card";
+
+        const preview = document.createElement("img");
+        preview.className = "font-preview-image";
+        preview.alt = `${font.display_name} preview`;
+        preview.loading = "lazy";
+        preview.src = buildFontPreviewUrl({
+            fontId: font.font_id,
+            width: 360,
+            height: 160,
+            sampleText: getFontBrowserSampleText(),
+        });
+        article.appendChild(preview);
+
+        const meta = document.createElement("div");
+        meta.className = "font-browser-meta";
+        meta.innerHTML = `
+            <strong>${escapeHtml(font.display_name || font.file_name || font.path)}</strong>
+            <span class="helper-text">${escapeHtml([font.style_name, font.file_name].filter(Boolean).join(" · "))}</span>
+        `;
+        article.appendChild(meta);
+
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "secondary-button";
+        button.dataset.action = "apply-system-font";
+        button.dataset.fontId = font.font_id;
+        button.textContent = `${getPublishFontLabel(state.fontBrowserTarget)}에 적용`;
+        article.appendChild(button);
+
+        dom.systemFontGallery.appendChild(article);
+    });
+}
+
+
+function renderPublishBaseline() {
+    const baseline = state.analysis?.gui_baseline;
+    const fontOptions = getCombinedFontOptionEntries();
+
+    updateSuggestionList(dom.styleSuggestionList, baseline?.style_candidates || []);
+    updateSuggestionList(dom.fontSuggestionList, buildFontDatalistValues());
+    [
+        dom.dialogueFontSelect,
+        dom.nameFontSelect,
+        dom.optionsFontSelect,
+        dom.interfaceFontSelect,
+        dom.systemFontSelect,
+        dom.glyphFontSelect,
+    ].forEach((element) => updateFontSelectOptions(element, fontOptions, element?.value || ""));
+    updateFontPresetOptions(baseline?.font_presets || [], state.selectedFontPresetId);
+    renderCurrentFontPreviewGrid();
+    renderSystemFontGallery();
+
+    if (!baseline || !Object.keys(baseline).length) {
+        dom.publishBaselineSummary.className = "publish-summary empty-state";
+        dom.publishBaselineSummary.textContent = "게임 분석 후 기본 GUI 폰트, 크기, 언어 스위치 훅을 여기서 요약합니다.";
+        return;
+    }
+
+    const fontDefaults = baseline.font_defaults || {};
+    const sizeDefaults = baseline.size_defaults || {};
+    const hookItems = (baseline.language_hook_files || [])
+        .map((filePath) => `<li>${escapeHtml(filePath)}</li>`)
+        .join("");
+    const presetItems = (baseline.font_presets || [])
+        .map((preset) => `<li><strong>${escapeHtml(preset.name)}</strong> <span class="helper-text">${escapeHtml(preset.description || "")}</span></li>`)
+        .join("");
+
+    dom.publishBaselineSummary.className = "publish-summary";
+    dom.publishBaselineSummary.innerHTML = `
+        <div class="publish-summary-grid">
+            <article class="inference-box">
+                <h3>기본 GUI 언어</h3>
+                <p class="helper-text">${escapeHtml(baseline.base_gui_language || "unicode")}</p>
+            </article>
+            <article class="inference-box">
+                <h3>기본 폰트</h3>
+                <p class="helper-text">대사 ${escapeHtml(fontDefaults.dialogue || "-")}</p>
+                <p class="helper-text">이름 ${escapeHtml(fontDefaults.name || "-")}</p>
+                <p class="helper-text">옵션 ${escapeHtml(fontDefaults.options || "-")}</p>
+                <p class="helper-text">UI ${escapeHtml(fontDefaults.interface || "-")}</p>
+            </article>
+            <article class="inference-box">
+                <h3>기본 크기</h3>
+                <p class="helper-text">대사 ${escapeHtml(sizeDefaults.dialogue ?? "-")} / 이름 ${escapeHtml(sizeDefaults.name ?? "-")} / UI ${escapeHtml(sizeDefaults.interface ?? "-")}</p>
+                <p class="helper-text">옵션 ${escapeHtml(sizeDefaults.options ?? "-")} / 라벨 ${escapeHtml(sizeDefaults.label ?? "-")} / 알림 ${escapeHtml(sizeDefaults.notify ?? "-")}</p>
+            </article>
+        </div>
+        <p class="helper-text">
+            ${baseline.supports_known_languages_menu
+                ? "이 게임은 Language()/known_languages() 흔적이 있어 새 tl 폴더를 언어 메뉴가 자동 인식할 가능성이 높습니다."
+                : "자동 언어 메뉴 흔적이 보이지 않습니다. publish 결과와 함께 Language(\"...\") 예시 안내문을 생성합니다."}
+        </p>
+        ${presetItems ? `<div class="helper-text"><strong>사용 가능한 폰트 프리셋</strong></div><ul class="sample-list">${presetItems}</ul>` : ""}
+        ${hookItems ? `<ul class="sample-list">${hookItems}</ul>` : ""}
+    `;
+}
+
+
+function applyPublishSettings(publishSettings = {}, overwrite = false) {
+    const defaults = state.analysis?.default_publish_settings || {};
+    const nextSettings = { ...defaults, ...(publishSettings || {}) };
+    const fontOptions = getCombinedFontOptionEntries();
+
+    if (overwrite || !dom.publishLanguageCodeInput.value.trim()) {
+        dom.publishLanguageCodeInput.value = nextSettings.language_code || "";
+    }
+    if (overwrite || !dom.publishDisplayNameInput.value.trim()) {
+        dom.publishDisplayNameInput.value = nextSettings.display_name || "";
+    }
+    if (overwrite || !dom.publishGuiLanguageInput.value.trim()) {
+        dom.publishGuiLanguageInput.value = nextSettings.gui_language || "";
+    }
+
+    dom.publishEnabledCheckbox.checked = nextSettings.enabled !== false;
+    dom.autoAdjustFontSizesCheckbox.checked = nextSettings.auto_adjust_sizes !== false;
+    state.selectedFontPresetId = nextSettings.font_preset_id || state.selectedFontPresetId || "";
+    updateFontPresetOptions(state.analysis?.gui_baseline?.font_presets || [], state.selectedFontPresetId);
+
+    const fontMappings = [
+        ["dialogue_font", dom.dialogueFontSelect],
+        ["name_font", dom.nameFontSelect],
+        ["options_font", dom.optionsFontSelect],
+        ["interface_font", dom.interfaceFontSelect],
+        ["system_font", dom.systemFontSelect],
+        ["glyph_font", dom.glyphFontSelect],
+    ];
+    fontMappings.forEach(([key, element]) => {
+        const nextValue = nextSettings[key] || "";
+        updateFontSelectOptions(element, fontOptions, overwrite ? nextValue : element.value || nextValue);
+        if (overwrite || !element.value.trim()) {
+            element.value = nextValue;
+        }
+    });
+
+    const scaleMappings = [
+        ["dialogue_scale", dom.dialogueScaleInput],
+        ["name_scale", dom.nameScaleInput],
+        ["options_scale", dom.optionsScaleInput],
+        ["interface_scale", dom.interfaceScaleInput],
+    ];
+    scaleMappings.forEach(([key, element]) => {
+        const htmlDefaultValue = element.defaultValue ?? "";
+        if (overwrite || !element.value || element.value === htmlDefaultValue) {
+            element.value = nextSettings[key] ?? 1;
+        }
+    });
+
+    if (overwrite || !captureStyleOverrideRows().some((entry) => entry.style_name || entry.font_path || entry.size)) {
+        setStyleOverrideRows(nextSettings.extra_style_overrides || []);
+    }
+    renderCurrentFontPreviewGrid();
+    renderSystemFontGallery();
+}
+
+
+function applyFontValueToTarget(targetKey, fontValue) {
+    const fieldMap = getPublishFontFieldMap();
+    const targetElement = fieldMap[targetKey];
+    if (!targetElement) {
+        return;
+    }
+    updateFontSelectOptions(targetElement, getCombinedFontOptionEntries(fontValue), fontValue);
+    targetElement.value = fontValue;
+    state.fontBrowserTarget = targetKey;
+    if (dom.fontBrowserTargetSelect) {
+        dom.fontBrowserTargetSelect.value = targetKey;
+    }
+    handlePublishControlInput({ target: targetElement });
+    renderCurrentFontPreviewGrid();
+    renderSystemFontGallery();
+}
+
+
+async function loadSystemFonts(force = false) {
+    if (state.systemFontsLoading) {
+        return;
+    }
+    if (state.systemFontsLoaded && !force) {
+        renderSystemFontGallery();
+        return;
+    }
+
+    state.systemFontsLoading = true;
+    state.fontBrowserPage = 0;
+    setFontBrowserStatus("Windows 글꼴을 읽는 중입니다...", "loading");
+    renderSystemFontGallery();
+    try {
+        const response = await apiGet("/system_fonts");
+        state.systemFonts = response.fonts || [];
+        state.systemFontsLoaded = true;
+        setFontBrowserStatus(`Windows 글꼴 ${state.systemFonts.length}개를 불러왔습니다.`, "ready");
+        renderPublishBaseline();
+    } catch (error) {
+        setFontBrowserStatus(`Windows 글꼴 로드 실패: ${error.message}`, "error");
+        addLog(`Windows 글꼴 로드 실패: ${error.message}`, "error");
+    } finally {
+        state.systemFontsLoading = false;
+        renderSystemFontGallery();
+    }
+}
+
+
+function handleSystemFontGalleryClick(event) {
+    const applyButton = event.target.closest("[data-action='apply-system-font']");
+    if (!applyButton) {
+        return;
+    }
+    const fontId = applyButton.dataset.fontId || "";
+    const fontEntry = (state.systemFonts || []).find((entry) => entry.font_id === fontId);
+    if (!fontEntry) {
+        return;
+    }
+    applyFontValueToTarget(state.fontBrowserTarget, fontEntry.path);
+    addLog(`글꼴 적용: ${fontEntry.display_name} -> ${getPublishFontLabel(state.fontBrowserTarget)}`, "success");
+}
+
+
+function applyFirstFilteredSystemFont() {
+    if (!state.systemFontsLoaded || state.systemFontsLoading) {
+        setFontBrowserStatus("먼저 Windows 글꼴 목록을 불러와 주세요.", "warning");
+        return;
+    }
+    const filtered = getFilteredSystemFonts();
+    const fontEntry = filtered[0];
+    if (!fontEntry) {
+        setFontBrowserStatus("검색 결과가 없어 적용할 글꼴을 찾지 못했습니다.", "warning");
+        return;
+    }
+    state.fontBrowserPage = 0;
+    applyFontValueToTarget(state.fontBrowserTarget, fontEntry.path);
+    addLog(`검색 결과 첫 글꼴 적용: ${fontEntry.display_name} -> ${getPublishFontLabel(state.fontBrowserTarget)}`, "success");
+}
 
 function applyWorldSettings(worldSettings = {}, overwrite = false) {
     if (overwrite || !dom.worldDescriptionInput.value.trim()) {
@@ -3244,6 +4296,52 @@ async function repairTranslationOutputs() {
 }
 
 
+async function applyPublishFontsOnly() {
+    const gamePath = dom.gamePathInput.value.trim();
+    if (!gamePath) {
+        addLog("게임 경로가 비어 있습니다.", "error");
+        return;
+    }
+    if (!state.analysis) {
+        addLog("먼저 게임 분석을 실행한 뒤 폰트를 다시 적용하세요.", "warning");
+        return;
+    }
+
+    dom.applyPublishFontsButton.disabled = true;
+    const originalText = dom.applyPublishFontsButton.textContent;
+    dom.applyPublishFontsButton.textContent = "폰트 적용 중..";
+    addLog("publish bundle 글꼴/설정만 다시 적용합니다.", "info");
+
+    try {
+        const response = await apiPost("/apply_publish_fonts", {
+            game_exe_path: gamePath,
+            analysis_mode: state.analysis.analysis_mode || "translation_layer",
+            target_language: dom.targetLanguageInput.value.trim() || "ko",
+            publish_settings: collectPublishSettings(),
+        });
+        if (response.publish_bundle?.publish_root) {
+            addLog(
+                `폰트만 재적용 완료: ${response.publish_bundle.publish_root} · copied fonts ${response.font_asset_count || 0}`,
+                "success",
+            );
+            if (response.publish_bundle.config_path) {
+                addLog(`언어 설정 파일: ${response.publish_bundle.config_path}`, "info");
+            }
+        } else if (response.publish_bundle?.reason) {
+            addLog(`폰트 재적용 경고: ${response.publish_bundle.reason}`, "warning");
+        } else {
+            addLog("폰트만 재적용 완료", "success");
+        }
+        activateTab("results");
+    } catch (error) {
+        addLog(`폰트만 재적용 실패: ${error.message}`, "error");
+    } finally {
+        dom.applyPublishFontsButton.disabled = false;
+        dom.applyPublishFontsButton.textContent = originalText;
+    }
+}
+
+
 async function pickExeAndAnalyze() {
     dom.pickExeButton.disabled = true;
     addLog("EXE 선택창 요청");
@@ -3437,8 +4535,11 @@ async function setupOpenAIOAuth() {
 
 function buildTranslationPayload(options = {}) {
     const apiKey = dom.apiKeyInput.value.trim();
-    if (!usesOpenAIOAuth() && !apiKey) {
+    if (supportsApiKey() && !apiKey) {
         throw new Error("API 키를 입력하세요.");
+    }
+    if (usesGeminiVertex() && !(dom.vertexProjectIdInput?.value || "").trim()) {
+        throw new Error("Vertex AI를 사용하려면 GCP 프로젝트 ID를 입력하세요.");
     }
     if (!state.analysis) {
         throw new Error("먼저 분석을 실행하세요.");
@@ -3449,6 +4550,7 @@ function buildTranslationPayload(options = {}) {
     const payload = {
         provider: dom.providerSelect.value,
         api_key: apiKey,
+        gemini_auth_mode: getGeminiAuthMode(),
         openai_auth_mode: getOpenAIAuthMode(),
         openai_oauth_command: normalizeOpenAIOAuthCommand(dom.openaiOAuthCommandInput.value),
         model_name: dom.modelInput.value.trim(),
@@ -3460,6 +4562,7 @@ function buildTranslationPayload(options = {}) {
         selected_files: Array.from(state.selectedFiles),
         character_profiles: collectCharacterProfiles(),
         world_settings: collectWorldSettings(),
+        vertex_settings: collectVertexSettings(),
         publish_settings: collectPublishSettings(),
     };
     const selectedSpeakerIds = Array.isArray(options.selectedSpeakerIds)
@@ -3525,6 +4628,7 @@ async function translateSelection(options = {}) {
     }
 
     dom.translateButton.disabled = true;
+    resetTranslationProgressUi();
     const runtimeLabel = payload.provider === "openai" && payload.openai_auth_mode === "oauth_cli"
         ? "openai-oauth"
         : payload.provider;
@@ -3534,7 +4638,19 @@ async function translateSelection(options = {}) {
     }
     addLog(`요청 범위: ${buildTranslationScopeLabel(payload)}`);
     try {
+        await prepareTranslationProgressUi(payload);
         const response = await apiPost("/translate", payload);
+        state.translationProgressRequestActive = false;
+        if (response.translation_session?.session_id) {
+            state.translationProgressSession = {
+                session_id: response.translation_session.session_id,
+                analysis_mode: state.analysis?.analysis_mode || "translation_layer",
+                target_language: payload.target_language,
+                game_exe_path: payload.game_exe_path || "",
+                status_path: response.translation_session.status_path || state.translationProgressSession?.status_path || "",
+            };
+        }
+        await fetchTranslationProgressStatusUi();
         renderResults(response);
         const logType = response.halted || response.failed_item_count ? "warning" : "success";
         addLog(
@@ -3571,10 +4687,66 @@ async function translateSelection(options = {}) {
         }
         activateTab(options.activateTabName || "results");
     } catch (error) {
+        state.translationProgressRequestActive = false;
+        await fetchTranslationProgressStatusUi();
         addLog(`번역 실패: ${error.message}`, "error");
         activateTab("results");
     } finally {
+        resetTranslationProgressUi({ preserveSession: true });
         dom.translateButton.disabled = false;
+    }
+}
+
+
+async function attachTranslationProgress() {
+    let payload;
+    try {
+        payload = buildTranslationPayload();
+    } catch (error) {
+        addLog(`진행도 연결 실패: ${error.message}`, "error");
+        return;
+    }
+
+    resetTranslationProgressUi();
+    try {
+        const response = await apiPostProgress("/find_active_translation_session", payload);
+        state.translationProgressSession = {
+            session_id: response.session_id,
+            analysis_mode: response.analysis_mode,
+            target_language: response.target_language,
+            game_exe_path: payload.game_exe_path || "",
+            status_path: response.status_path || "",
+        };
+        state.translationProgressStatus = response.status || null;
+        state.translationProgressRequestActive = Boolean(response.active);
+        renderTranslationProgressUi();
+        if (response.status) {
+            logTranslationProgressUpdate(response.status, { force: true, type: response.active ? "info" : "success" });
+        }
+        activateTab("results");
+        await fetchTranslationProgressStatusUi();
+        state.translationProgressPollHandle = window.setInterval(() => {
+            fetchTranslationProgressStatusUi().catch(() => {});
+        }, 2000);
+
+        const requestedScope = normalizeProgressScope(payload.translation_scope || {});
+        const matchedScope = normalizeProgressScope(response.translation_scope || {});
+        if (!response.active) {
+            addLog(`현재 진행 중인 번역 세션은 없습니다. 최근 세션 상태를 표시합니다: session=${response.session_id}`, "warning");
+        } else if (JSON.stringify(requestedScope) !== JSON.stringify(matchedScope)) {
+            addLog(`현재 설정과 다른 활성 세션에 연결했습니다: session=${response.session_id}`, "warning");
+        } else {
+            addLog(`진행도 연결: session=${response.session_id}`, "success");
+        }
+        return;
+    } catch (error) {
+        addLog(`활성 세션 자동 탐색 실패: ${error.message}`, "warning");
+    }
+
+    await prepareTranslationProgressUi(payload);
+    if (state.translationProgressSession?.session_id) {
+        addLog(`현재 설정 기준 세션에 연결: session=${state.translationProgressSession.session_id}`, "success");
+        activateTab("results");
     }
 }
 
@@ -3643,9 +4815,11 @@ async function translateSelectedAdultQueue(itemIds = Array.from(state.selectedAd
 
 
 function buildProfilePayload() {
+    const vertexSettings = collectVertexSettings();
     return {
         translation_preset_id: state.selectedTranslationPresetId || inferTranslationPresetId() || "",
         provider: dom.providerSelect.value,
+        gemini_auth_mode: getGeminiAuthMode(),
         openai_auth_mode: getOpenAIAuthMode(),
         openai_oauth_command: normalizeOpenAIOAuthCommand(dom.openaiOAuthCommandInput.value),
         model_name: dom.modelInput.value.trim(),
@@ -3656,6 +4830,10 @@ function buildProfilePayload() {
         include_adult_content: dom.includeAdultCheckbox.checked,
         game_path: dom.gamePathInput.value.trim(),
         world_settings: collectWorldSettings(),
+        vertex_settings: {
+            ...vertexSettings,
+            credentials_json: "",
+        },
         publish_settings: collectPublishSettings(),
         character_profiles: collectCharacterProfiles(),
         selected_files: Array.from(state.selectedFiles),
@@ -3694,6 +4872,7 @@ function normalizeLoadedProfile(profile = {}) {
     return {
         ...normalized,
         provider: normalized.provider || normalized.translation_provider || "gemini",
+        gemini_auth_mode: normalized.gemini_auth_mode || normalized.gemini_mode || "api_key",
         openai_auth_mode: normalized.openai_auth_mode || normalized.auth_mode || "api_key",
         openai_oauth_command: normalized.openai_oauth_command || normalized.codex_command || "",
         model_name: normalized.model_name || normalized.model || "",
@@ -3710,6 +4889,7 @@ function normalizeLoadedProfile(profile = {}) {
         include_adult_content: Boolean(normalized.include_adult_content ?? normalized.include_adult ?? false),
         game_path: normalized.game_path || normalized.game_exe_path || "",
         world_settings: normalized.world_settings || normalized.default_world_settings || {},
+        vertex_settings: normalized.vertex_settings || {},
         publish_settings: sanitizeLegacyPublishSettings(
             normalized.publish_settings || normalized.default_publish_settings || {},
             targetLanguage,
@@ -3741,12 +4921,14 @@ function applyProfile(profile) {
     }
 
     dom.providerSelect.value = profile.provider || dom.providerSelect.value || "gemini";
+    dom.geminiAuthModeSelect.value = profile.gemini_auth_mode || dom.geminiAuthModeSelect.value || "api_key";
     dom.openaiAuthModeSelect.value = profile.openai_auth_mode || dom.openaiAuthModeSelect.value || "api_key";
     dom.openaiOAuthCommandInput.value = normalizeOpenAIOAuthCommand(profile.openai_oauth_command);
     updateModelSuggestions();
     dom.apiKeyInput.value = supportsApiKey(
         profile.provider || dom.providerSelect.value,
         profile.openai_auth_mode || getOpenAIAuthMode(),
+        profile.gemini_auth_mode || getGeminiAuthMode(),
     ) ? (profile.api_key || "") : "";
     if (!dom.apiKeyInput.value) {
         syncStoredApiKeyForCurrentScope();
@@ -3762,6 +4944,13 @@ function applyProfile(profile) {
     dom.apiDelayInput.value = profile.api_delay ?? getDefaultApiDelayValue(profile.provider || dom.providerSelect.value, profile.openai_auth_mode || getOpenAIAuthMode());
     dom.includeAdultCheckbox.checked = Boolean(profile.include_adult_content);
     dom.gamePathInput.value = profile.game_path || "";
+    dom.vertexProjectIdInput.value = profile.vertex_settings?.project_id || "";
+    dom.vertexLocationInput.value = profile.vertex_settings?.location || dom.vertexLocationInput.value || "global";
+    dom.vertexCredentialsPathInput.value = profile.vertex_settings?.credentials_path || "";
+    dom.vertexCredentialsJsonInput.value = profile.vertex_settings?.credentials_json || "";
+    setVertexCredentialsStatus(dom.vertexCredentialsJsonInput.value.trim()
+        ? "프로필에 저장된 서비스 계정 JSON을 복원했습니다."
+        : "경로, JSON 파일 로드, JSON 붙여넣기 중 하나만 사용해도 됩니다. JSON에 project_id가 있으면 프로젝트 ID를 자동으로 채웁니다.");
     applyWorldSettings(profile.world_settings || {}, true);
     applyPublishSettings(profile.publish_settings || {}, true);
     state.characterProfiles = profile.character_profiles || {};
@@ -3867,6 +5056,10 @@ function handlePublishControlInput(event) {
         state.selectedFontPresetId = "";
         updateFontPresetOptions(state.analysis?.gui_baseline?.font_presets || [], "");
     }
+    if (fontControlIds.has(target.id)) {
+        renderCurrentFontPreviewGrid();
+        renderSystemFontGallery();
+    }
 }
 
 
@@ -3903,23 +5096,26 @@ async function previewCharacterTone(speakerId = state.selectedCharacterId) {
     }
 
     const provider = dom.providerSelect.value || "gemini";
+    const geminiAuthMode = getGeminiAuthMode();
     const openaiAuthMode = getOpenAIAuthMode();
     const profile = state.characterProfiles[speakerId] || {};
     const payload = {
         provider,
+        gemini_auth_mode: geminiAuthMode,
         openai_auth_mode: openaiAuthMode,
         openai_oauth_command: normalizeOpenAIOAuthCommand(dom.openaiOAuthCommandInput.value),
         model_name: dom.modelInput.value.trim(),
         target_language: dom.targetLanguageInput.value.trim() || "ko",
         include_adult_content: dom.includeAdultCheckbox.checked,
         world_settings: collectWorldSettings(),
+        vertex_settings: collectVertexSettings(),
         character_profiles: collectCharacterProfiles(),
         speaker_id: character.speaker_id,
         speaker_name: profile.display_name || character.display_name || character.speaker_id,
         sample_lines: (character.sample_lines || []).slice(0, 4),
     };
 
-    if (provider === "gemini" || (provider === "openai" && openaiAuthMode === "api_key")) {
+    if (supportsApiKey(provider, openaiAuthMode, geminiAuthMode)) {
         payload.api_key = dom.apiKeyInput.value.trim();
     }
 
@@ -3953,6 +5149,7 @@ async function previewCharacterToneComparison(speakerId = state.selectedCharacte
     }
 
     const provider = dom.providerSelect.value || "gemini";
+    const geminiAuthMode = getGeminiAuthMode();
     const openaiAuthMode = getOpenAIAuthMode();
     const profile = state.characterProfiles[speakerId] || {};
     const sampleLines = (character.sample_lines || []).slice(0, 5);
@@ -3974,12 +5171,14 @@ async function previewCharacterToneComparison(speakerId = state.selectedCharacte
 
     const commonPayload = {
         provider,
+        gemini_auth_mode: geminiAuthMode,
         openai_auth_mode: openaiAuthMode,
         openai_oauth_command: normalizeOpenAIOAuthCommand(dom.openaiOAuthCommandInput.value),
         model_name: dom.modelInput.value.trim(),
         target_language: dom.targetLanguageInput.value.trim() || "ko",
         include_adult_content: dom.includeAdultCheckbox.checked,
         world_settings: collectWorldSettings(),
+        vertex_settings: collectVertexSettings(),
         speaker_id: character.speaker_id,
         speaker_name: profile.display_name || character.display_name || character.speaker_id,
         sample_lines: sampleLines,
@@ -3997,7 +5196,7 @@ async function previewCharacterToneComparison(speakerId = state.selectedCharacte
                     variant.profile,
                 ),
             };
-            if (provider === "gemini" || (provider === "openai" && openaiAuthMode === "api_key")) {
+            if (supportsApiKey(provider, openaiAuthMode, geminiAuthMode)) {
                 payload.api_key = dom.apiKeyInput.value.trim();
             }
 
@@ -4557,9 +5756,87 @@ async function handleIssueCandidateQueueClick(event) {
 }
 
 
+async function handleVertexCredentialsFileChange(event) {
+    const file = event.target.files?.[0];
+    if (!file) {
+        return;
+    }
+    try {
+        const rawText = await file.text();
+        applyVertexCredentialsJson(rawText, `${file.name} 파일`);
+        addLog(`Vertex 서비스 계정 JSON 로드 완료: ${file.name}`, "success");
+    } catch (error) {
+        setVertexCredentialsStatus(`서비스 계정 JSON 로드 실패: ${error.message}`);
+        addLog(`Vertex 서비스 계정 JSON 로드 실패: ${error.message}`, "error");
+    }
+}
+
+
+function renderApiKeyStorageStatus() {
+    if (!dom.apiKeyStorageStatus) {
+        return;
+    }
+    if (usesGeminiVertex()) {
+        dom.apiKeyStorageStatus.textContent = "Vertex AI mode uses your GCP project plus ADC or a service account JSON instead of an API key.";
+        return;
+    }
+    if (!supportsApiKey()) {
+        dom.apiKeyStorageStatus.textContent = "Codex OAuth mode does not use API key storage.";
+        return;
+    }
+
+    const label = getApiKeyStorageLabel();
+    const savedKey = getStoredApiKey();
+    const currentKey = dom.apiKeyInput.value.trim();
+    if (!savedKey) {
+        dom.apiKeyStorageStatus.textContent = `No saved ${label} for the current scope.`;
+        return;
+    }
+    if (!currentKey) {
+        dom.apiKeyStorageStatus.textContent = `A saved ${label} is available. Click load to restore it into the input field.`;
+        return;
+    }
+    if (savedKey === currentKey) {
+        dom.apiKeyStorageStatus.textContent = `The current ${label} matches the saved value for this scope.`;
+        return;
+    }
+    dom.apiKeyStorageStatus.textContent = `The current ${label} differs from the saved value for this scope.`;
+}
+
+
+function updateProviderUI() {
+    const isOpenAI = dom.providerSelect.value === "openai";
+    const isGemini = dom.providerSelect.value === "gemini";
+    const useOauth = usesOpenAIOAuth();
+    const useVertex = usesGeminiVertex();
+    const apiKeySupported = supportsApiKey(dom.providerSelect.value, getOpenAIAuthMode(), getGeminiAuthMode());
+    dom.openaiOAuthCommandInput.value = normalizeOpenAIOAuthCommand(dom.openaiOAuthCommandInput.value);
+    if (!useOauth) {
+        clearOpenAIOAuthPoll();
+    }
+
+    dom.geminiAuthField?.classList.toggle("hidden", !isGemini);
+    dom.openaiAuthField.classList.toggle("hidden", !isOpenAI);
+    dom.apiKeyField.classList.toggle("hidden", !apiKeySupported);
+    dom.geminiVertexPanel?.classList.toggle("hidden", !isGemini || !useVertex);
+    dom.openaiOAuthPanel.classList.toggle("hidden", !isOpenAI || !useOauth);
+    dom.apiKeyInput.disabled = !apiKeySupported;
+    dom.batchSizeInput.disabled = false;
+    dom.apiDelayInput.disabled = useOauth;
+    renderApiKeyStorageStatus();
+    renderTranslationHint();
+
+    if (useOauth) {
+        dom.openaiOAuthStatus.textContent = dom.openaiOAuthStatus.textContent || "CLI status check pending.";
+    }
+    renderTranslationPresetSummary();
+}
+
+
 function init() {
     applyTranslationPreset(DEFAULT_TRANSLATION_PRESET_ID, { log: false });
     syncStoredApiKeyForCurrentScope();
+    setVertexCredentialsStatus("경로, JSON 파일 로드, JSON 붙여넣기 중 하나만 사용해도 됩니다. JSON에 project_id가 있으면 프로젝트 ID를 자동으로 채웁니다.");
     setGlossaryRows([]);
     setStyleOverrideRows([]);
     renderSummary();
@@ -4579,6 +5856,29 @@ function init() {
         updateModelSuggestions();
         syncStoredApiKeyForCurrentScope();
         syncTranslationPresetSelection();
+    });
+    dom.geminiAuthModeSelect?.addEventListener("change", () => {
+        updateModelSuggestions();
+        syncStoredApiKeyForCurrentScope();
+        syncTranslationPresetSelection();
+    });
+    dom.loadVertexCredentialsFileButton?.addEventListener("click", () => dom.vertexCredentialsFileInput?.click());
+    dom.clearVertexCredentialsButton?.addEventListener("click", clearVertexCredentialsJson);
+    dom.vertexCredentialsFileInput?.addEventListener("change", (event) => {
+        handleVertexCredentialsFileChange(event).catch(() => {});
+    });
+    dom.vertexCredentialsJsonInput?.addEventListener("change", () => {
+        const rawText = dom.vertexCredentialsJsonInput.value.trim();
+        if (!rawText) {
+            setVertexCredentialsStatus("서비스 계정 JSON 입력이 비어 있습니다.");
+            return;
+        }
+        try {
+            applyVertexCredentialsJson(rawText, "붙여넣기");
+        } catch (error) {
+            setVertexCredentialsStatus(`서비스 계정 JSON 파싱 실패: ${error.message}`);
+            addLog(`Vertex 서비스 계정 JSON 파싱 실패: ${error.message}`, "error");
+        }
     });
     dom.openaiAuthModeSelect.addEventListener("change", () => {
         updateModelSuggestions();
@@ -4612,6 +5912,9 @@ function init() {
     dom.addStyleOverrideRowButton.addEventListener("click", () => addStyleOverrideRow());
     dom.styleOverrideTable.addEventListener("click", handleStyleOverrideClick);
     dom.applyFontPresetButton.addEventListener("click", handleFontPresetApply);
+    dom.applyPublishFontsButton?.addEventListener("click", () => {
+        applyPublishFontsOnly().catch(() => {});
+    });
     [
         dom.dialogueFontSelect,
         dom.nameFontSelect,
@@ -4632,6 +5935,7 @@ function init() {
     dom.characterGrid.addEventListener("input", handleCharacterGridInput);
     dom.characterGrid.addEventListener("change", handleCharacterGridChange);
     dom.translateButton.addEventListener("click", translateSelection);
+    dom.attachProgressButton?.addEventListener("click", attachTranslationProgress);
     dom.issueCandidateSearchInput?.addEventListener("input", handleIssueCandidateSearchInput);
     dom.selectVisibleIssueCandidatesButton?.addEventListener("click", () => {
         getVisibleIssueCandidates().forEach((item) => state.selectedIssueCandidateIds.add(item.item_id));
@@ -4667,6 +5971,53 @@ function init() {
 
 
 init();
+
+if (dom.fontBrowserSampleTextInput && !dom.fontBrowserSampleTextInput.value.trim()) {
+    dom.fontBrowserSampleTextInput.value = DEFAULT_FONT_BROWSER_SAMPLE_TEXT;
+}
+if (dom.fontBrowserTargetSelect?.value) {
+    state.fontBrowserTarget = dom.fontBrowserTargetSelect.value;
+}
+dom.loadSystemFontsButton?.addEventListener("click", () => {
+    loadSystemFonts(true).catch(() => {});
+});
+dom.fontBrowserTargetSelect?.addEventListener("change", () => {
+    state.fontBrowserTarget = dom.fontBrowserTargetSelect.value || "dialogue_font";
+    state.fontBrowserPage = 0;
+    renderSystemFontGallery();
+});
+dom.fontBrowserSearchInput?.addEventListener("input", () => {
+    state.fontBrowserQuery = dom.fontBrowserSearchInput.value.trim();
+    state.fontBrowserPage = 0;
+    renderSystemFontGallery();
+});
+dom.fontBrowserSearchInput?.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") {
+        return;
+    }
+    event.preventDefault();
+    state.fontBrowserQuery = dom.fontBrowserSearchInput.value.trim();
+    applyFirstFilteredSystemFont();
+});
+dom.applyFirstFilteredFontButton?.addEventListener("click", () => {
+    state.fontBrowserQuery = dom.fontBrowserSearchInput?.value.trim() || "";
+    applyFirstFilteredSystemFont();
+});
+dom.fontBrowserSampleTextInput?.addEventListener("input", () => {
+    state.fontBrowserPage = 0;
+    renderCurrentFontPreviewGrid();
+    renderSystemFontGallery();
+});
+dom.fontBrowserPrevButton?.addEventListener("click", () => {
+    state.fontBrowserPage = Math.max(0, (state.fontBrowserPage || 0) - 1);
+    renderSystemFontGallery();
+});
+dom.fontBrowserNextButton?.addEventListener("click", () => {
+    state.fontBrowserPage = Math.max(0, (state.fontBrowserPage || 0) + 1);
+    renderSystemFontGallery();
+});
+dom.systemFontGallery?.addEventListener("click", handleSystemFontGalleryClick);
+loadSystemFonts(false).catch(() => {});
 
 dom.editorFileSelect?.addEventListener("change", () => {
     state.editorFilePath = dom.editorFileSelect.value || "";

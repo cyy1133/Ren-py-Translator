@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="./webui.css?v=20260314-2305">
+    <link rel="stylesheet" href="./webui.css?v=20260323-1720">
 </head>
 <body>
     <main class="app-shell">
@@ -40,6 +40,13 @@
                         <option value="openai">OpenAI</option>
                     </select>
                 </label>
+                <label class="field" id="geminiAuthField">
+                    <span>Gemini 인증 방식</span>
+                    <select id="geminiAuthModeSelect">
+                        <option value="api_key">Gemini Developer API key</option>
+                        <option value="vertex_ai">Vertex AI</option>
+                    </select>
+                </label>
                 <label class="field hidden" id="openaiAuthField">
                     <span>OpenAI 인증 방식</span>
                     <select id="openaiAuthModeSelect">
@@ -57,6 +64,42 @@
                     </div>
                     <p class="helper-text" id="apiKeyStorageStatus">현재 범위에 저장된 API 키가 없습니다.</p>
                 </label>
+                <div class="provider-note hidden" id="geminiVertexPanel">
+                    <div class="provider-note-header">
+                        <div>
+                            <p class="section-kicker">Vertex AI</p>
+                            <h3>GCP 크레딧 사용 모드</h3>
+                        </div>
+                    </div>
+                    <p class="helper-text">
+                        Vertex AI를 사용하면 GCP 프로젝트 기준으로 청구되므로, Google Cloud 무료 크레딧과 예산 관리 대상에 포함시킬 수 있습니다.
+                        기본 인증은 Application Default Credentials 또는 서비스 계정 JSON 경로를 사용합니다.
+                    </p>
+                    <div class="field-row">
+                        <label class="field">
+                            <span>GCP 프로젝트 ID</span>
+                            <input type="text" id="vertexProjectIdInput" placeholder="예: my-gcp-project">
+                        </label>
+                        <label class="field">
+                            <span>Vertex 리전</span>
+                            <input type="text" id="vertexLocationInput" value="global" placeholder="예: global 또는 us-central1">
+                        </label>
+                    </div>
+                    <label class="field">
+                        <span>서비스 계정 JSON 경로 (선택)</span>
+                        <input type="text" id="vertexCredentialsPathInput" placeholder="비워두면 ADC를 사용합니다">
+                    </label>
+                    <div class="field-actions">
+                        <button type="button" class="secondary-button mini-button" id="loadVertexCredentialsFileButton">JSON 파일 불러오기</button>
+                        <button type="button" class="ghost-button mini-button" id="clearVertexCredentialsButton">JSON 입력 초기화</button>
+                    </div>
+                    <input type="file" id="vertexCredentialsFileInput" class="hidden" accept=".json,application/json">
+                    <label class="field">
+                        <span>서비스 계정 JSON 붙여넣기 (선택)</span>
+                        <textarea id="vertexCredentialsJsonInput" rows="6" placeholder='{"type":"service_account","project_id":"..."}'></textarea>
+                    </label>
+                    <p class="helper-text" id="vertexCredentialsStatus">경로, JSON 파일 로드, JSON 붙여넣기 중 하나만 사용해도 됩니다. JSON에 project_id가 있으면 프로젝트 ID를 자동으로 채웁니다.</p>
+                </div>
                 <div class="provider-note hidden" id="openaiOAuthPanel">
                     <div class="provider-note-header">
                         <div>
@@ -96,6 +139,9 @@
                         <h3>빠른 번역 모드</h3>
                     </div>
                     <div class="translation-preset-grid" id="translationPresetGrid"></div>
+                    <p class="helper-text">
+                        `균형 번역`, `문체 정밀`, `저비용`, `프리미엄 교정`, `코덱스 문체 실험` 버튼으로 상황별 추천 세팅을 바로 적용할 수 있습니다.
+                    </p>
                     <p class="helper-text" id="translationPresetSummary">
                         `추천 품질` 프리셋이 기본으로 적용됩니다. Gemini 2.5 Flash 기본값은 batch 16 / delay 0.2 / retry 2이며, 긴 대사는 글자수 기준으로 더 잘게 나눕니다.
                     </p>
@@ -302,6 +348,7 @@
                         </select>
                     </label>
                     <button type="button" class="secondary-button" id="applyFontPresetButton">프리셋 적용</button>
+                    <button type="button" class="secondary-button" id="applyPublishFontsButton">폰트만 다시 적용</button>
                 </div>
                 <div class="publish-font-grid">
                     <label class="field">
@@ -340,6 +387,47 @@
                             <option value="">기존 유지</option>
                         </select>
                     </label>
+                </div>
+                <div class="stack gap-sm font-browser-shell">
+                    <div class="inline-header">
+                        <div>
+                            <h3>Windows 글꼴 브라우저</h3>
+                            <p class="helper-text">
+                                Windows에 설치된 글꼴을 미리 보고, 원하는 슬롯에 바로 적용할 수 있습니다. 외부 글꼴은 번역 완료 시 publish bundle 안으로 자동 복사됩니다.
+                            </p>
+                        </div>
+                        <button type="button" class="secondary-button" id="loadSystemFontsButton">윈도우 글꼴 불러오기</button>
+                    </div>
+                    <div class="font-browser-toolbar">
+                        <label class="field compact-field">
+                            <span>적용 슬롯</span>
+                            <select id="fontBrowserTargetSelect">
+                                <option value="dialogue_font">대사 폰트</option>
+                                <option value="name_font">이름 폰트</option>
+                                <option value="options_font">옵션 폰트</option>
+                                <option value="interface_font">UI 폰트</option>
+                                <option value="system_font">시스템 폰트</option>
+                                <option value="glyph_font">Glyph 폰트</option>
+                            </select>
+                        </label>
+                        <label class="field">
+                            <span>글꼴 검색</span>
+                            <input type="text" id="fontBrowserSearchInput" placeholder="폰트 이름, 파일명, 스타일 검색">
+                        </label>
+                        <button type="button" class="secondary-button font-browser-apply-button" id="applyFirstFilteredFontButton">첫 검색 결과 적용</button>
+                        <label class="field">
+                            <span>미리보기 문구</span>
+                            <input type="text" id="fontBrowserSampleTextInput" value="가나다라마바사 ABC 123" placeholder="가나다라마바사 ABC 123">
+                        </label>
+                    </div>
+                    <div id="fontBrowserStatus" class="helper-text">윈도우 글꼴을 불러오면 미리보기와 적용 버튼이 표시됩니다.</div>
+                    <div class="font-browser-pagination">
+                        <button type="button" class="secondary-button" id="fontBrowserPrevButton">이전 18개</button>
+                        <span id="fontBrowserPageInfo" class="helper-text">페이지 1 / 1</span>
+                        <button type="button" class="secondary-button" id="fontBrowserNextButton">다음 18개</button>
+                    </div>
+                    <div id="currentFontPreviewGrid" class="current-font-preview-grid"></div>
+                    <div id="systemFontGallery" class="system-font-gallery empty-state">윈도우 글꼴을 불러오면 여기에 미리보기 카드가 표시됩니다.</div>
                 </div>
                 <div class="field-row">
                     <label class="field">
@@ -512,9 +600,11 @@
                         </select>
                     </label>
                     <button type="button" id="translateButton">선택 파일 번역</button>
+                    <button type="button" id="attachProgressButton" class="secondary-button">진행도 연결</button>
                     <span class="helper-text" id="translationHint">게임 분석 또는 업로드 분석 후 실행할 수 있습니다.</span>
                 </div>
                 <div id="resultsPanel" class="results-panel empty-state">번역 결과가 아직 없습니다.</div>
+                <div id="translationProgressPanel" class="results-panel empty-state">번역 진행도 표시가 아직 없습니다.</div>
                 <div id="logPanel" class="log-panel"></div>
             </section>
         </section>
@@ -522,6 +612,6 @@
 
     <datalist id="fontSuggestionList"></datalist>
     <datalist id="styleSuggestionList"></datalist>
-    <script src="./webui.js?v=20260314-2305"></script>
+    <script src="./webui.js?v=20260323-1720"></script>
 </body>
 </html>
