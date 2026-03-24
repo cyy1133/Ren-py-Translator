@@ -3,8 +3,6 @@
 Ren'Py Translation Workbench에서 `Google Gemini -> Vertex AI` 모드를 사용할 때, Google Cloud 프로젝트 청구와 무료 크레딧 확인 흐름을 정리한 가이드입니다.  
 *This guide explains how to use `Google Gemini -> Vertex AI` mode in Ren'Py Translation Workbench, with a focus on Google Cloud billing and free-credit verification.*
 
-![Vertex AI 설정 화면](../screenshots/00b-vertex-ai.png)
-
 ## 1. 왜 Vertex AI를 쓰는가
 
 - `Gemini Developer API key` 경로는 Google AI Studio / Developer API 청구 흐름입니다. / *The `Gemini Developer API key` path uses the Google AI Studio / Developer API billing flow.*
