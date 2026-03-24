@@ -1,6 +1,17 @@
 # 외부 공유 / 게시판 임베드 가이드
 
-Ren'Py Translation Workbench 첫 작업 HTML 튜토리얼을 외부 사이트나 마크다운 게시판에 붙일 때 사용할 수 있는 링크와 예시입니다.
+Ren'Py Translation Workbench 첫 작업 튜토리얼을 외부 사이트나 마크다운 게시판에 붙일 때 사용할 수 있는 링크와 예시입니다.
+
+## 먼저 알아둘 점
+
+많은 마크다운 게시판은 `<!DOCTYPE html> ...` 같은 **전체 HTML 문서**를 렌더하지 않고, 소스 코드 그대로 보여줍니다.  
+그래서 게시판 본문에 직접 붙일 때는 HTML 문서보다 **마크다운 전용 버전**을 쓰는 편이 맞습니다.
+
+- 게시판용 마크다운 튜토리얼:
+  - <https://github.com/cyy1133/Ren-py-Translator/blob/main/docs/tutorials/first-run-workbench-guide-board.md>
+  - <https://cdn.jsdelivr.net/gh/cyy1133/Ren-py-Translator@main/docs/tutorials/first-run-workbench-guide-board.md>
+- 외부 공유용 HTML 튜토리얼:
+  - <https://cdn.jsdelivr.net/gh/cyy1133/Ren-py-Translator@main/docs/tutorials/first-run-workbench-guide.html>
 
 ## 1. 외부 공유용 HTML URL
 
@@ -43,10 +54,13 @@ Ren'Py Translation Workbench 첫 작업 HTML 튜토리얼을 외부 사이트나
 
 - Markdown 링크만 사용
 - 미리보기 이미지 + 링크 사용
-- 게시글 본문에는 짧은 요약만 넣고 튜토리얼 HTML로 이동시키기
+- 게시글 본문에는 [마크다운 전용 튜토리얼](https://github.com/cyy1133/Ren-py-Translator/blob/main/docs/tutorials/first-run-workbench-guide-board.md) 내용을 붙이고, HTML 버전은 별도 링크로 제공하기
 
 ## 6. 함께 붙이면 좋은 보조 링크
 
+- 게시판용 마크다운 튜토리얼:
+  - <https://github.com/cyy1133/Ren-py-Translator/blob/main/docs/tutorials/first-run-workbench-guide-board.md>
+  - <https://cdn.jsdelivr.net/gh/cyy1133/Ren-py-Translator@main/docs/tutorials/first-run-workbench-guide-board.md>
 - 튜토리얼 HTML:
   - <https://cdn.jsdelivr.net/gh/cyy1133/Ren-py-Translator@main/docs/tutorials/first-run-workbench-guide.html>
 - Vertex AI / Google Cloud 무료 크레딧 가이드:
