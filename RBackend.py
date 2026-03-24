@@ -5065,23 +5065,95 @@ def persist_translation_session_state(
     write_json_artifact(runtime.status_path, status_payload)
 
 
+def recover_scope_item_ids_for_runtime(
+    runtime: TranslationSessionRuntime,
+    session_payload: Dict[str, Any],
+    expected_total: int,
+) -> List[str]:
+    if not runtime.game_dir or not runtime.game_dir.is_dir():
+        return []
+
+    document_paths = [
+        str(path or "").strip()
+        for path in (session_payload.get("documents") or [])
+        if str(path or "").strip()
+    ]
+    if not document_paths:
+        return []
+
+    translation_scope = session_payload.get("translation_scope") or {}
+    recovery_payload: Dict[str, Any] = {
+        "game_exe_path": str(runtime.game_dir),
+        "target_language": session_payload.get("target_language") or runtime.target_language,
+        "selected_files": document_paths,
+        "translation_scope": translation_scope,
+        "selected_speaker_ids": translation_scope.get("selected_speaker_ids") or [],
+        "selected_item_ids": translation_scope.get("selected_item_ids") or [],
+        "force_retranslate": bool(translation_scope.get("force_retranslate")),
+    }
+    translation_rule = str(translation_scope.get("translation_rule") or "").strip()
+    if translation_rule:
+        recovery_payload["translation_rule"] = translation_rule
+
+    try:
+        translation_inputs = get_documents_for_translation(recovery_payload)
+    except Exception:  # noqa: BLE001
+        return []
+
+    recovered_item_ids = [
+        item.item_id
+        for document in (translation_inputs.get("documents") or [])
+        for item in getattr(document, "items", [])
+        if getattr(item, "item_id", None)
+    ]
+    if expected_total > 0 and len(recovered_item_ids) != expected_total:
+        return []
+    return recovered_item_ids
+
+
 def build_translation_status_payload(runtime: TranslationSessionRuntime) -> Dict[str, Any]:
     session_payload = read_json_artifact(runtime.metadata_path)
     status_payload = read_json_artifact(runtime.status_path)
+    checkpoint_payload = read_json_artifact(runtime.checkpoint_path)
+
+    scope_item_ids = [
+        str(item_id)
+        for item_id in (session_payload.get("scope_item_ids") or [])
+        if isinstance(item_id, str) and item_id.strip()
+    ]
+    translated_lookup = checkpoint_payload.get("translated_lookup") if isinstance(checkpoint_payload, dict) else {}
+    translated_lookup_keys = set(translated_lookup.keys()) if isinstance(translated_lookup, dict) else set()
 
     total_item_count = try_parse_int(status_payload.get("total_item_count"))
     if total_item_count is None:
         total_item_count = try_parse_int(session_payload.get("total_items")) or 0
 
-    translated_item_count = try_parse_int(status_payload.get("translated_item_count")) or 0
+    if not scope_item_ids:
+        recovered_scope_item_ids = recover_scope_item_ids_for_runtime(runtime, session_payload, total_item_count)
+        if recovered_scope_item_ids:
+            scope_item_ids = recovered_scope_item_ids
+            session_payload["scope_item_ids"] = recovered_scope_item_ids
+            session_payload["scope_total_items"] = len(recovered_scope_item_ids)
+            write_json_artifact(runtime.metadata_path, session_payload)
+
     failed_item_count = try_parse_int(status_payload.get("failed_item_count")) or 0
     skipped_adult_count = try_parse_int(status_payload.get("skipped_adult_count")) or 0
-    pending_item_count = try_parse_int(status_payload.get("pending_item_count"))
-    if pending_item_count is None:
+
+    if scope_item_ids and translated_lookup_keys:
+        total_item_count = len(scope_item_ids)
+        translated_item_count = sum(1 for item_id in scope_item_ids if item_id in translated_lookup_keys)
         pending_item_count = max(
             0,
             total_item_count - translated_item_count - failed_item_count - skipped_adult_count,
         )
+    else:
+        translated_item_count = try_parse_int(status_payload.get("translated_item_count")) or 0
+        pending_item_count = try_parse_int(status_payload.get("pending_item_count"))
+        if pending_item_count is None:
+            pending_item_count = max(
+                0,
+                total_item_count - translated_item_count - failed_item_count - skipped_adult_count,
+            )
     completed_item_count = max(
         0,
         min(total_item_count, translated_item_count + failed_item_count + skipped_adult_count),
@@ -5844,6 +5916,8 @@ def translate_documents(
                 "documents": [document.file_relative_path for document in documents],
                 "ordered_documents": [document.file_relative_path for document in ordered_documents],
                 "total_items": total_items,
+                "scope_total_items": total_items,
+                "scope_item_ids": [item.item_id for item in translatable_items if item.item_id],
                 "resumed_item_count": resumed_item_count,
                 "translation_scope": translation_scope,
                 "checkpoint_path": str(runtime.checkpoint_path),

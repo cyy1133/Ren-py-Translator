@@ -872,6 +872,33 @@ button:disabled {
     overflow-wrap: anywhere;
 }
 
+.font-size-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 2px;
+    margin-bottom: 10px;
+}
+
+.font-size-chip {
+    display: inline-flex;
+    align-items: center;
+    min-height: 24px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--muted);
+    font-size: 0.84rem;
+    line-height: 1;
+}
+
+.font-size-chip.strong {
+    color: var(--text);
+    border-color: rgba(255, 199, 128, 0.28);
+    background: rgba(255, 199, 128, 0.08);
+}
+
 .font-preview-image {
     width: 100%;
     max-width: 100%;
@@ -893,6 +920,34 @@ button:disabled {
     color: var(--muted);
     text-align: center;
     padding: 16px;
+}
+
+.font-size-controls {
+    display: grid;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.font-size-field {
+    display: grid;
+    gap: 6px;
+}
+
+.font-size-field span {
+    font-size: 0.8rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.font-size-field input {
+    width: 100%;
+}
+
+.font-size-caption {
+    font-size: 0.85rem;
+    color: var(--muted);
+    line-height: 1.45;
 }
 
 .system-font-gallery {

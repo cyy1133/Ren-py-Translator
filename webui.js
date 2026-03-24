@@ -2015,6 +2015,44 @@ function getPublishFontLabel(key) {
 }
 
 
+function getPublishScaleFieldMap() {
+    return {
+        dialogue_font: dom.dialogueScaleInput,
+        name_font: dom.nameScaleInput,
+        options_font: dom.optionsScaleInput,
+        interface_font: dom.interfaceScaleInput,
+    };
+}
+
+
+function getPublishSizeBaselineMap() {
+    const sizeDefaults = state.analysis?.gui_baseline?.size_defaults || {};
+    return {
+        dialogue_font: Number(sizeDefaults.dialogue || 0),
+        name_font: Number(sizeDefaults.name || 0),
+        options_font: Number(sizeDefaults.options || 0),
+        interface_font: Number(sizeDefaults.interface || 0),
+        system_font: Number(sizeDefaults.notify || sizeDefaults.interface || 0),
+        glyph_font: Number(sizeDefaults.label || sizeDefaults.interface || 0),
+    };
+}
+
+
+function getPublishFontSizeSummary(key) {
+    const baselineSize = Number(getPublishSizeBaselineMap()[key] || 0);
+    const scaleField = getPublishScaleFieldMap()[key] || null;
+    const scale = scaleField ? Number(scaleField.value || 1) || 1 : 1;
+    const effectiveSize = baselineSize > 0 ? Number((baselineSize * scale).toFixed(1)) : 0;
+    return {
+        adjustable: Boolean(scaleField),
+        baselineSize,
+        scale,
+        effectiveSize,
+        scaleFieldId: scaleField?.id || "",
+    };
+}
+
+
 function getFilteredSystemFonts() {
     const query = state.fontBrowserQuery.trim().toLowerCase();
     return (state.systemFonts || []).filter((font) => {
@@ -2041,6 +2079,7 @@ function renderCurrentFontPreviewGrid() {
         label: getPublishFontLabel(key),
         value: element?.value.trim() || "",
         entry: getFontEntryByValue(element?.value.trim() || ""),
+        sizeSummary: getPublishFontSizeSummary(key),
     }));
 
     if (!cards.some((card) => card.value)) {
@@ -2062,6 +2101,21 @@ function renderCurrentFontPreviewGrid() {
         `;
         article.appendChild(heading);
 
+        const sizeMeta = document.createElement("div");
+        sizeMeta.className = "font-size-meta";
+        const sizeBits = [];
+        if (card.sizeSummary.baselineSize > 0) {
+            sizeBits.push(`<span class="font-size-chip">기본 ${escapeHtml(card.sizeSummary.baselineSize)}px</span>`);
+        }
+        if (card.sizeSummary.adjustable) {
+            sizeBits.push(`<span class="font-size-chip">배율 ${escapeHtml(card.sizeSummary.scale.toFixed(2))}</span>`);
+        }
+        if (card.sizeSummary.effectiveSize > 0) {
+            sizeBits.push(`<span class="font-size-chip strong">예상 ${escapeHtml(card.sizeSummary.effectiveSize)}px</span>`);
+        }
+        sizeMeta.innerHTML = sizeBits.join("");
+        article.appendChild(sizeMeta);
+
         if (card.value) {
             const preview = document.createElement("img");
             preview.className = "font-preview-image";
@@ -2074,6 +2128,26 @@ function renderCurrentFontPreviewGrid() {
             empty.className = "font-preview-empty";
             empty.textContent = "기존 폰트를 유지합니다.";
             article.appendChild(empty);
+        }
+
+        if (card.sizeSummary.adjustable) {
+            const controls = document.createElement("div");
+            controls.className = "font-size-controls";
+            controls.innerHTML = `
+                <label class="font-size-field">
+                    <span>배율</span>
+                    <input
+                        type="number"
+                        min="0.6"
+                        max="1.8"
+                        step="0.02"
+                        value="${escapeHtml(card.sizeSummary.scale.toFixed(2))}"
+                        data-scale-field-id="${escapeHtml(card.sizeSummary.scaleFieldId)}"
+                    >
+                </label>
+                <div class="font-size-caption">기본 ${escapeHtml(card.sizeSummary.baselineSize || "-")}px 기준으로 publish 시 자동 반영됩니다.</div>
+            `;
+            article.appendChild(controls);
         }
 
         dom.currentFontPreviewGrid.appendChild(article);
@@ -2192,8 +2266,12 @@ function renderSystemFontGallery() {
     const pageLabel = filtered.length
         ? `${startIndex + 1}-${Math.min(endIndex, filtered.length)}`
         : "0";
+    const targetSizeSummary = getPublishFontSizeSummary(state.fontBrowserTarget);
+    const targetSizeLabel = targetSizeSummary.effectiveSize > 0
+        ? ` · 예상 크기 ${targetSizeSummary.effectiveSize}px`
+        : "";
     setFontBrowserStatus(
-        `Windows 글꼴 ${state.systemFonts.length}개 중 ${filtered.length}개 검색 결과 · 현재 ${pageLabel} 표시 · 적용 슬롯: ${getPublishFontLabel(state.fontBrowserTarget)}`,
+        `Windows 글꼴 ${state.systemFonts.length}개 중 ${filtered.length}개 검색 결과 · 현재 ${pageLabel} 표시 · 적용 슬롯: ${getPublishFontLabel(state.fontBrowserTarget)}${targetSizeLabel}`,
         visibleFonts.length ? "ready" : "warning",
     );
     setPaginationState(
@@ -2232,6 +2310,7 @@ function renderSystemFontGallery() {
         meta.innerHTML = `
             <strong>${escapeHtml(font.display_name || font.file_name || font.path)}</strong>
             <span class="helper-text">${escapeHtml([font.style_name, font.file_name].filter(Boolean).join(" · "))}</span>
+            ${targetSizeSummary.effectiveSize > 0 ? `<span class="helper-text">이 슬롯 적용 예상 크기 ${escapeHtml(targetSizeSummary.effectiveSize)}px</span>` : ""}
         `;
         article.appendChild(meta);
 
@@ -2240,7 +2319,7 @@ function renderSystemFontGallery() {
         button.className = "secondary-button";
         button.dataset.action = "apply-system-font";
         button.dataset.fontId = font.font_id;
-        button.textContent = `${getPublishFontLabel(state.fontBrowserTarget)}에 적용`;
+        button.textContent = `${getPublishFontLabel(state.fontBrowserTarget)}${targetSizeSummary.effectiveSize > 0 ? ` (${targetSizeSummary.effectiveSize}px)` : ""}에 적용`;
         article.appendChild(button);
 
         dom.systemFontGallery.appendChild(article);
@@ -5063,6 +5142,20 @@ function handlePublishControlInput(event) {
 }
 
 
+function handleCurrentFontPreviewGridInput(event) {
+    const scaleFieldId = event.target?.dataset?.scaleFieldId || "";
+    if (!scaleFieldId) {
+        return;
+    }
+    const linkedField = document.getElementById(scaleFieldId);
+    if (!linkedField) {
+        return;
+    }
+    linkedField.value = event.target.value;
+    handlePublishControlInput({ target: linkedField });
+}
+
+
 function handleFileSelection(event) {
     if (event.target.type !== "checkbox") {
         return;
@@ -6016,6 +6109,8 @@ dom.fontBrowserNextButton?.addEventListener("click", () => {
     state.fontBrowserPage = Math.max(0, (state.fontBrowserPage || 0) + 1);
     renderSystemFontGallery();
 });
+dom.currentFontPreviewGrid?.addEventListener("input", handleCurrentFontPreviewGridInput);
+dom.currentFontPreviewGrid?.addEventListener("change", handleCurrentFontPreviewGridInput);
 dom.systemFontGallery?.addEventListener("click", handleSystemFontGalleryClick);
 loadSystemFonts(false).catch(() => {});
 
