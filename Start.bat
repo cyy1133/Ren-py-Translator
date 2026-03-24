@@ -12,6 +12,10 @@ set "VENV_PY=%VENV_DIR%\Scripts\python.exe"
 set "VENV_PYW=%VENV_DIR%\Scripts\pythonw.exe"
 set "LAUNCH_PY=%VENV_PY%"
 set "BOOTSTRAP_PYTHON="
+set "RENTRY_RENPY_LATEST_PAGE=https://www.renpy.org/latest.html"
+set "RENTRY_RENPY_SDK_FALLBACK_URL=https://www.renpy.org/dl/8.5.2/renpy-8.5.2-sdk.zip"
+set "RENTRY_RENPY_SDK_ZIP=%APP_ROOT%\renpy_sdk.zip"
+set "RENTRY_RENPY_SDK_DIR=%APP_ROOT%\renpy_sdk"
 
 echo [1/7] Checking Python runtime...
 call :resolve_python
@@ -43,11 +47,8 @@ echo [4/7] Checking optional Node.js runtime for Codex CLI...
 call :ensure_node_runtime
 
 echo [5/7] Preparing bundled Ren'Py SDK...
-if not exist "%APP_ROOT%\renpy_sdk" (
-    if exist "%APP_ROOT%\renpy_sdk.zip" (
-        powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -Path '%APP_ROOT%\renpy_sdk.zip' -DestinationPath '%APP_ROOT%\renpy_sdk' -Force" >nul
-    )
-)
+call :ensure_renpy_sdk
+if errorlevel 1 goto :fail
 
 echo [6/7] Starting backend and local web server...
 call :ensure_backend
@@ -124,6 +125,60 @@ echo Installing Node.js LTS for Codex CLI support...
 winget install -e --id OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements --disable-interactivity >nul
 
 :node_done
+exit /b 0
+
+:ensure_renpy_sdk
+if exist "%RENTRY_RENPY_SDK_DIR%" exit /b 0
+
+if not exist "%RENTRY_RENPY_SDK_ZIP%" (
+    echo Ren'Py SDK archive not found. Downloading the official SDK...
+    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+        "$latestPage = $env:RENTRY_RENPY_LATEST_PAGE;" ^
+        "$fallbackUrl = $env:RENTRY_RENPY_SDK_FALLBACK_URL;" ^
+        "$targetZip = $env:RENTRY_RENPY_SDK_ZIP;" ^
+        "$downloadUrl = $env:RENTRY_RENPY_SDK_URL;" ^
+        "if (-not $downloadUrl) {" ^
+        "  try {" ^
+        "    $page = Invoke-WebRequest -Uri $latestPage -UseBasicParsing -TimeoutSec 30;" ^
+        "    $patterns = @(" ^
+        "      'https://www\.renpy\.org/dl/[0-9.]+/renpy-[0-9.]+-sdk\.zip'," ^
+        "      'href=\"(/dl/[0-9.]+/renpy-[0-9.]+-sdk\.zip)\"'" ^
+        "    );" ^
+        "    foreach ($pattern in $patterns) {" ^
+        "      $match = [regex]::Match($page.Content, $pattern);" ^
+        "      if ($match.Success) {" ^
+        "        $downloadUrl = $match.Value;" ^
+        "        if ($match.Groups.Count -gt 1 -and $match.Groups[1].Value) { $downloadUrl = 'https://www.renpy.org' + $match.Groups[1].Value }" ^
+        "        break;" ^
+        "      }" ^
+        "    }" ^
+        "  } catch { }" ^
+        "}" ^
+        "if (-not $downloadUrl) { $downloadUrl = $fallbackUrl }" ^
+        "Invoke-WebRequest -Uri $downloadUrl -OutFile $targetZip -UseBasicParsing -TimeoutSec 120"
+    if errorlevel 1 (
+        echo Failed to download the Ren'Py SDK.
+        exit /b 1
+    )
+)
+
+if not exist "%RENTRY_RENPY_SDK_ZIP%" (
+    echo Ren'Py SDK archive could not be found or downloaded.
+    exit /b 1
+)
+
+echo Extracting Ren'Py SDK...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -Path '%RENTRY_RENPY_SDK_ZIP%' -DestinationPath '%RENTRY_RENPY_SDK_DIR%' -Force" >nul
+if errorlevel 1 (
+    echo Failed to extract the Ren'Py SDK archive.
+    exit /b 1
+)
+
+if not exist "%RENTRY_RENPY_SDK_DIR%" (
+    echo Ren'Py SDK directory was not created successfully.
+    exit /b 1
+)
+
 exit /b 0
 
 :ensure_backend

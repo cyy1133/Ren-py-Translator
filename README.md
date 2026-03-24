@@ -231,6 +231,7 @@ For the Windows release package, you can unpack the archive and run `Start.bat`.
 - Python dependencies are installed from `requirements.txt`.
 - Node.js is installed with `winget` if Codex CLI support is needed and Node is missing.
 - If `renpy_sdk.zip` is bundled in the release archive, it is unpacked automatically on first run.
+- If `renpy_sdk.zip` is missing, `Start.bat` downloads the official Ren'Py SDK zip from the latest Ren'Py release page and extracts it automatically.
 - After startup, the local backend is available at `http://127.0.0.1:5000` and the UI opens at `http://127.0.0.1:8765/WebUI.HTML`.
 
 The user only needs to enter API keys in the UI.
