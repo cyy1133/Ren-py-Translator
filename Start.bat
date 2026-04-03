@@ -128,54 +128,10 @@ winget install -e --id OpenJS.NodeJS.LTS --accept-package-agreements --accept-so
 exit /b 0
 
 :ensure_renpy_sdk
-if exist "%RENTRY_RENPY_SDK_DIR%" exit /b 0
-
-if not exist "%RENTRY_RENPY_SDK_ZIP%" (
-    echo Ren'Py SDK archive not found. Downloading the official SDK...
-    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-        "$latestPage = $env:RENTRY_RENPY_LATEST_PAGE;" ^
-        "$fallbackUrl = $env:RENTRY_RENPY_SDK_FALLBACK_URL;" ^
-        "$targetZip = $env:RENTRY_RENPY_SDK_ZIP;" ^
-        "$downloadUrl = $env:RENTRY_RENPY_SDK_URL;" ^
-        "if (-not $downloadUrl) {" ^
-        "  try {" ^
-        "    $page = Invoke-WebRequest -Uri $latestPage -UseBasicParsing -TimeoutSec 30;" ^
-        "    $patterns = @(" ^
-        "      'https://www\.renpy\.org/dl/[0-9.]+/renpy-[0-9.]+-sdk\.zip'," ^
-        "      'href=\"(/dl/[0-9.]+/renpy-[0-9.]+-sdk\.zip)\"'" ^
-        "    );" ^
-        "    foreach ($pattern in $patterns) {" ^
-        "      $match = [regex]::Match($page.Content, $pattern);" ^
-        "      if ($match.Success) {" ^
-        "        $downloadUrl = $match.Value;" ^
-        "        if ($match.Groups.Count -gt 1 -and $match.Groups[1].Value) { $downloadUrl = 'https://www.renpy.org' + $match.Groups[1].Value }" ^
-        "        break;" ^
-        "      }" ^
-        "    }" ^
-        "  } catch { }" ^
-        "}" ^
-        "if (-not $downloadUrl) { $downloadUrl = $fallbackUrl }" ^
-        "Invoke-WebRequest -Uri $downloadUrl -OutFile $targetZip -UseBasicParsing -TimeoutSec 120"
-    if errorlevel 1 (
-        echo Failed to download the Ren'Py SDK.
-        exit /b 1
-    )
-)
-
-if not exist "%RENTRY_RENPY_SDK_ZIP%" (
-    echo Ren'Py SDK archive could not be found or downloaded.
-    exit /b 1
-)
-
-echo Extracting Ren'Py SDK...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -Path '%RENTRY_RENPY_SDK_ZIP%' -DestinationPath '%RENTRY_RENPY_SDK_DIR%' -Force" >nul
+echo Verifying Ren'Py SDK files...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%APP_ROOT%\tools\download_renpy_sdk.ps1" >nul
 if errorlevel 1 (
-    echo Failed to extract the Ren'Py SDK archive.
-    exit /b 1
-)
-
-if not exist "%RENTRY_RENPY_SDK_DIR%" (
-    echo Ren'Py SDK directory was not created successfully.
+    echo Failed to prepare the Ren'Py SDK.
     exit /b 1
 )
 
